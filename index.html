@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Field routes</title>
+<meta name="theme-color" content="#1f5c3f">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Routes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="vendor/leaflet.css">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="topbar">
+  <h1>Field routes</h1>
+  <button id="repBtn" class="chip" type="button" aria-label="Change rep"></button>
+</header>
+
+<div id="banner" class="banner" hidden></div>
+
+<main id="main">
+  <!-- STORES -->
+  <section id="view-stores" class="view">
+    <div class="filters">
+      <div class="row">
+        <select id="listSel" aria-label="Store list"></select>
+        <select id="regionSel" aria-label="Region"></select>
+      </div>
+      <input id="search" type="search" placeholder="Search a store, city or number" autocomplete="off" aria-label="Search stores">
+      <div class="row between">
+        <label class="check"><input id="hideDone" type="checkbox"> Hide completed</label>
+        <button id="addShown" class="btn small" type="button">Add shown to route</button>
+      </div>
+      <div class="row between meta">
+        <span id="count"></span>
+        <button id="addStoreBtn" class="link" type="button">+ New store</button>
+      </div>
+    </div>
+    <ul id="storeList" class="stores"></ul>
+  </section>
+
+  <!-- MAP -->
+  <section id="view-map" class="view">
+    <div id="map"></div>
+    <div id="geoStatus" class="geo-status" hidden></div>
+  </section>
+
+  <!-- ROUTE -->
+  <section id="view-route" class="view">
+    <div class="pad">
+      <div class="card">
+        <div class="row between">
+          <div>
+            <div class="label">Start</div>
+            <div id="startText" class="strong"></div>
+          </div>
+          <button id="removeLoc" class="link" type="button" hidden>Remove my location</button>
+        </div>
+        <div class="row gap">
+          <button id="startHere" class="btn" type="button">Start from here</button>
+          <button id="optimize" class="btn primary" type="button">Optimize</button>
+        </div>
+      </div>
+
+      <div id="routeSummary" class="card summary" hidden></div>
+
+      <div id="routeActions" hidden>
+        <div class="row gap">
+          <a id="gmaps" class="btn" target="_blank" rel="noopener">Google Maps</a>
+          <a id="amaps" class="btn" target="_blank" rel="noopener">Apple Maps</a>
+        </div>
+        <p id="mapsNote" class="hint"></p>
+        <div class="row gap">
+          <button id="saveDay" class="btn primary" type="button">Save this day</button>
+          <button id="clearRoute" class="btn danger" type="button">Clear</button>
+        </div>
+      </div>
+      <ol id="routeList" class="route"></ol>
+      <p id="routeEmpty" class="empty">No stores yet. Tap a store in the list or on the map to add it to today's route.</p>
+
+    </div>
+  </section>
+
+  <!-- MORE -->
+  <section id="view-more" class="view">
+    <div class="pad">
+      <div class="card">
+        <h2>Monthly report</h2>
+        <p class="hint">Every store, every region. The region filter does not apply.</p>
+        <input id="monthPick" type="month" aria-label="Month">
+        <div id="monthStats" class="stats"></div>
+        <button id="monthXlsx" class="btn" type="button">Download Excel recap</button>
+      </div>
+      <div class="card">
+        <h2>Weekly mileage</h2>
+        <p class="hint">Pick any day. The week runs Monday to Sunday.</p>
+        <input id="weekPick" type="date" aria-label="Any day in the week">
+        <div id="weekTable"></div>
+        <button id="weekXlsx" class="btn" type="button">Download Excel</button>
+      </div>
+      <div class="card">
+        <h2>This phone</h2>
+        <p class="hint">Notes, orders, kilometres and pins are saved on this device, under the rep name shown at the top. Make a backup before changing phones.</p>
+        <div class="row gap">
+          <button id="backupBtn" class="btn" type="button">Download backup</button>
+          <label class="btn" for="restoreFile">Restore backup</label>
+          <input id="restoreFile" type="file" accept="application/json,.json" hidden>
+        </div>
+        <button id="replaceBtn" class="link" type="button">Place all addresses again</button>
+      </div>
+    </div>
+  </section>
+</main>
+
+<nav class="tabs" aria-label="Sections">
+  <button data-tab="stores" class="on" type="button"><span class="ic">☰</span>Stores</button>
+  <button data-tab="map" type="button" class="only-phone"><span class="ic">◎</span>Map</button>
+  <button data-tab="route" type="button"><span class="ic">↻</span>Route<span id="routeBadge" class="badge" hidden></span></button>
+  <button data-tab="more" type="button"><span class="ic">▤</span>Reports</button>
+</nav>
+
+<div id="sheet" class="sheet" hidden>
+  <div class="sheet-bg" data-close></div>
+  <div class="sheet-body" role="dialog" aria-modal="true">
+    <div class="sheet-head">
+      <button class="back" data-close type="button" aria-label="Close">✕</button>
+      <div id="sheetTitle" class="sheet-title"></div>
+    </div>
+    <div id="sheetContent" class="sheet-content"></div>
+    <div id="sheetFoot" class="sheet-foot" hidden></div>
+  </div>
+</div>
+
+<div id="toast" class="toast" hidden></div>
+
+<script src="vendor/leaflet.js"></script>
+<script src="vendor/jszip.min.js"></script>
+<script src="vendor/exceljs.min.js"></script>
+<script src="config.js"></script>
+<script src="data/stores.js"></script>
+<script src="data/template.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
