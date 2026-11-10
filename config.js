@@ -4,6 +4,9 @@ window.FR_CONFIG = {
   orderEmail: "francois@magnoliamedia.ca",
   defaultRep: "Francois Demers",
   minimumOrder: 300,
+
+  // GoHighLevel go-between on Render. Can also be typed in Reports > GoHighLevel.
+  api: { url: "" },
   timeZone: "America/Toronto",
 
   // Cells of the brand's Excel order form (data/template.js holds the form itself).

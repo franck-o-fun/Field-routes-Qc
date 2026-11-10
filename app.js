@@ -132,9 +132,13 @@ function renderFilters() {
   $("#regionSel").value = S.region;
   $("#hideDone").checked = S.hideDone;
 }
+function renderCount() {
+  const n = shownStores().length;
+  $("#count").textContent = `${n} store${n === 1 ? "" : "s"} shown · ${S.route.length} on today's route` + (G.pending ? ` · ${G.pending} to sync` : "");
+}
 function renderStores() {
   const shown = shownStores();
-  $("#count").textContent = `${shown.length} store${shown.length === 1 ? "" : "s"} shown · ${S.route.length} on today's route`;
+  renderCount();
   $("#storeList").innerHTML = shown.length ? shown.map(s => {
     const inR = S.route.includes(s.id), g = S.geo[s.id];
     const tags = (S.done.has(s.id) ? `<span class="tag done">Done today</span>` : "") +
@@ -457,6 +461,125 @@ $("#saveDay").addEventListener("click", async () => {
   } catch (e) { toast("Could not save the day on this phone. Free some storage and try again.", true); }
 });
 
+/* ---------- GoHighLevel sync (through the go-between service) ---------- */
+const API = {
+  url: () => String(LS.get("apiUrl", (C.api && C.api.url) || "")).trim().replace(/\/+$/, ""),
+  key: () => String(LS.get("apiKey", "")).trim()
+};
+const connected = () => !!(API.url() && API.key());
+const G = { running: false, pending: 0, error: "", timer: null, last: 0 };
+async function api(method, path, body, ms) {
+  const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), ms || 75000);
+  try {
+    const r = await fetch(API.url() + path, { method, signal: ctl.signal,
+      headers: Object.assign({ "X-App-Key": API.key() }, body ? { "Content-Type": "application/json" } : {}), body: body ? JSON.stringify(body) : undefined });
+    let j = {}; try { j = await r.json(); } catch (e) { /* empty */ }
+    if (!r.ok) { const e = new Error(j.error || `The service answered ${r.status}.`); e.status = r.status; throw e; }
+    return j;
+  } catch (e) {
+    if (e.name === "AbortError") { const x = new Error("The service did not answer in time. It may be waking up; try again in a minute."); x.status = 0; throw x; }
+    if (!e.status && e.status !== 0) { const x = new Error("No connection to the service. It will retry when you have signal."); x.status = 0; throw x; }
+    throw e;
+  } finally { clearTimeout(t); }
+}
+const blobToDataUrl = b => new Promise((res, rej) => { const f = new FileReader(); f.onload = () => res(f.result); f.onerror = () => rej(f.error); f.readAsDataURL(b); });
+async function contactFor(id, create) {
+  const m = LS.get("ghlContacts", {}); if (m[id]) return m[id];
+  if (!create) return null;
+  const s = byId.get(id); if (!s) throw new Error("This store is no longer in the list.");
+  const meta = S.meta[id] || {}, list = lists.find(l => l.id === s.listId);
+  const r = await api("POST", "/api/contact", { store: { id, name: label(s), address: s.address, city: s.city, postal: s.postal, phone: s.phone, email: s.email,
+    region: regionOf(s), storeNo: meta.storeNo || s.storeNo, list: list ? list.name : "" } });
+  m[id] = r.contactId; LS.set("ghlContacts", m); return r.contactId;
+}
+async function countPending() {
+  try { let n = 0; for (const st of ["notes", "orders"]) n += mine(await all(st)).filter(r => r.sync === "pending").length; G.pending = n; } catch (e) { G.pending = 0; }
+  paintSync(); return G.pending;
+}
+function paintSync() {
+  const el = $("#ghlStatus"); if (el) {
+    el.textContent = !connected() ? "Not connected. Notes and orders stay on this phone." :
+      G.running ? "Syncing…" : G.error ? `${G.pending} waiting to sync. ${G.error}` :
+      G.pending ? `${G.pending} waiting to sync.` : "Connected. Everything is synced to GoHighLevel.";
+  }
+  renderCount();
+}
+async function syncNote(r) {
+  const contactId = await contactFor(r.storeId, true);
+  const urls = r.photoUrls || [];
+  const out = await api("POST", "/api/note", { contactId, noteId: r.ghlNoteId || null, text: r.text, date: r.date, rep: r.rep, storeName: r.storeName,
+    photoUrls: urls, photos: (r.photos || []).slice(urls.length) });
+  Object.assign(r, { ghlNoteId: out.noteId, photoUrls: out.photoUrls, sync: "done", syncedAt: Date.now() });
+  await put("notes", r);
+}
+async function syncOrder(r) {
+  const contactId = await contactFor(r.storeId, true);
+  const s = byId.get(r.storeId);
+  const o = { storeName: r.storeName, storeNo: r.storeNo, po: r.po, address: r.address, rep: r.repName || r.rep, contact: r.contact, qty: r.qty };
+  const fileName = r.fileName || `Bon de commande ${safeName((s ? label(s) : r.storeName).replace("#", ""))} ${r.date}.xlsx`;
+  const xlsx = r.fileUrl ? null : await blobToDataUrl(await buildOrderXlsx(o));
+  const lines = C.products.filter(p => (r.qty[p.id] || 0) > 0).map(p => ({ name: p.name, size: p.size, qty: r.qty[p.id], price: p.price }));
+  const out = await api("POST", "/api/order", { contactId, noteId: r.ghlNoteId || null, opportunityId: r.opportunityId || null, fileUrl: r.fileUrl || null,
+    xlsx, fileName, date: r.date, rep: o.rep, po: r.po, contact: r.contact, storeName: s ? label(s) : r.storeName, lines, total: r.total, minimum: C.minimumOrder });
+  Object.assign(r, { ghlNoteId: out.noteId, opportunityId: out.opportunityId || null, fileUrl: out.fileUrl || r.fileUrl, sync: "done", syncedAt: Date.now() });
+  await put("orders", r);
+  if (out.warning) toast(out.warning, true);
+}
+async function syncAll(manual) {
+  if (G.running || !connected()) { if (manual && !connected()) toast("Add the service address and app password first.", true); return; }
+  G.running = true; G.error = ""; paintSync();
+  let done = 0;
+  try {
+    const work = [];
+    for (const st of ["notes", "orders"]) for (const r of mine(await all(st))) if (r.sync === "pending") work.push([st, r]);
+    work.sort((a, b) => a[1].ts - b[1].ts);
+    for (const [st, r] of work) {
+      try { if (st === "notes") await syncNote(r); else await syncOrder(r); done++; }
+      catch (e) {
+        G.error = e.message;
+        if (e.status === 401 || e.status === 0 || e.status >= 500) break;   // wrong password, no signal or service down: stop, retry later
+        r.syncError = e.message; await put(st, r);                          // this one item failed: keep going with the others
+      }
+    }
+  } catch (e) { G.error = "Saved data could not be read."; }
+  G.running = false; G.last = Date.now();
+  await countPending();
+  if (manual) toast(G.error ? G.error : done ? `${done} item${done === 1 ? "" : "s"} sent to GoHighLevel.` : "Nothing waiting. Everything is synced.", !!G.error);
+  clearTimeout(G.timer);
+  if (G.pending && connected()) G.timer = setTimeout(() => syncAll(), G.error ? 120000 : 5000);
+}
+const syncSoon = () => { if (!connected()) return countPending(); clearTimeout(G.timer); G.timer = setTimeout(() => syncAll(), 800); };
+window.addEventListener("online", () => syncSoon());
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && G.pending) syncSoon(); });
+// Last visit as written in GoHighLevel (from this phone, a laptop or a teammate).
+function parseRemote(n) {
+  const lines = String(n.body || "").split("\n");
+  if (/^Commande /.test(lines[0])) return null;
+  let date = (n.date || "").slice(0, 10), rep = "";
+  const h = /^Visite (\d{4}-\d{2}-\d{2})(?:\s*·\s*(.*))?$/.exec(lines[0] || "");
+  if (h) { date = h[1]; rep = h[2] || ""; lines.shift(); if (lines[0] === "") lines.shift(); }
+  const pi = lines.lastIndexOf("Photos :");
+  const photos = pi >= 0 ? lines.slice(pi + 1).filter(l => /^https?:\/\//.test(l)) : [];
+  const text = (pi >= 0 ? lines.slice(0, pi) : lines).join("\n").trim();
+  return { remote: true, ghlNoteId: n.id, date, rep, text, photos, photoUrls: photos, ts: Date.parse(n.date) || 0 };
+}
+async function lastRemoteNote(id) {
+  if (!connected() || !navigator.onLine) return null;
+  try {
+    const cid = await contactFor(id, false); if (!cid) return null;
+    const r = await api("GET", "/api/notes?contactId=" + encodeURIComponent(cid), null, 9000);
+    for (const n of r.notes || []) { const p = parseRemote(n); if (p) return p; }
+  } catch (e) { /* offline or asleep: the phone's own note is shown */ }
+  return null;
+}
+async function lastNoteFor(id) {
+  const [local, remote] = await Promise.all([storeNotes(id).catch(() => []), lastRemoteNote(id)]);
+  const l = local[0] || null;
+  if (!remote) return l;
+  if (l && (l.ghlNoteId === remote.ghlNoteId || l.sync === "pending" || l.ts >= remote.ts)) return l;
+  return remote;
+}
+
 /* ---------- store record ---------- */
 const mine = rows => rows.filter(r => r.rep === S.rep);
 async function storeNotes(id) { return mine(await tx("notes", "readonly", s => s.index("storeId").getAll(id))).sort((a, b) => b.ts - a.ts); }
@@ -468,7 +591,7 @@ async function refreshDone() {
 const mapsHref = s => "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent([s.name, s.address, s.city, s.postal].filter(Boolean).join(", "));
 async function openStore(id) {
   const s = byId.get(id), m = S.meta[id] || {}, g = S.geo[id];
-  const [notes, orders] = await Promise.all([storeNotes(id).catch(() => []), storeOrders(id).catch(() => [])]);
+  const [notes, orders, lastN] = await Promise.all([storeNotes(id).catch(() => []), storeOrders(id).catch(() => []), lastNoteFor(id).catch(() => null)]);
   const inR = S.route.includes(id);
   openSheet(s.name, `
     <div class="card"><div class="addr">${esc(s.address || "No street address")}<br>${esc([s.city, s.postal].filter(Boolean).join(" "))}
@@ -479,9 +602,9 @@ async function openStore(id) {
       ${s.email ? `<div class="hint">${esc(s.email)}</div>` : ""}</div>
     <div class="grid2"><button class="btn primary" data-go="order">Order</button><button class="btn primary" data-go="note">Note</button></div>
     <button class="btn" data-go="route">${inR ? "Remove from route" : "Add to route"}</button>
-    <div class="card"><h2>Last visit</h2>${notes[0] ? `<div class="hint">${niceDate(notes[0].date)}</div><div class="note-last">${esc(notes[0].text)}</div>${photosHtml(notes[0].photos)}` : `<p class="hint">No earlier note.</p>`}</div>
+    <div class="card"><h2>Last visit</h2>${lastN ? `<div class="hint">${niceDate(lastN.date)}${lastN.remote ? " · from GoHighLevel" + (lastN.rep ? ", " + esc(lastN.rep) : "") : ""}</div><div class="note-last">${esc(lastN.text)}</div>${photosHtml(lastN.photos)}` : `<p class="hint">No earlier note.</p>`}</div>
     <div class="card"><h2>Orders</h2>${orders.length ? `<div class="hist">${orders.slice(0, 8).map(o => `<div class="h"><b>${money(o.total)}</b>${o.total < C.minimumOrder ? " · under minimum" : ""}<small>${niceDate(o.date)}${o.po ? " · PO " + esc(o.po) : ""}</small></div>`).join("")}</div>` : `<p class="hint">No order saved for this store yet.</p>`}</div>
-    ${notes.length > 1 ? `<div class="card"><h2>Earlier notes</h2><div class="hist">${notes.slice(1, 8).map(n => `<div class="h"><small>${niceDate(n.date)}</small><div class="note-last">${esc(n.text)}</div></div>`).join("")}</div></div>` : ""}`);
+    ${notes.filter(n => n !== lastN).length ? `<div class="card"><h2>Earlier notes</h2><div class="hist">${notes.filter(n => n !== lastN).slice(0, 7).map(n => `<div class="h"><small>${niceDate(n.date)}</small><div class="note-last">${esc(n.text)}</div></div>`).join("")}</div></div>` : ""}`);
   $("#sheetContent").onclick = e => {
     const b = e.target.closest("[data-go]"); if (!b) return;
     if (b.dataset.go === "order") openOrder(id); else if (b.dataset.go === "note") openNote(id);
@@ -504,12 +627,11 @@ function shrink(file) {
   });
 }
 async function openNote(id) {
-  const s = byId.get(id); let notes = [];
-  try { notes = await storeNotes(id); } catch (e) { /* shown below */ }
-  const last = notes[0]; let editing = null, photos = [], text = "";
+  const s = byId.get(id);
+  const last = await lastNoteFor(id).catch(() => null); let editing = null, photos = [], text = "";
   const draw = () => {
     openSheet("Note · " + s.name, `
-      <div class="card"><h2>Last visit</h2>${last ? `<div class="hint">${niceDate(last.date)}</div><div class="note-last">${esc(last.text)}</div>${photosHtml(last.photos)}
+      <div class="card"><h2>Last visit</h2>${last ? `<div class="hint">${niceDate(last.date)}${last.remote ? " · from GoHighLevel" : ""}</div><div class="note-last">${esc(last.text)}</div>${photosHtml(last.photos)}
         ${editing ? "" : `<button class="btn small" type="button" id="nEdit">Edit</button>`}` : `<p class="hint">No earlier note.</p>`}</div>
       <div class="card"><h2>${editing ? "Edit the last note" : "What happened"}</h2>
         <textarea id="nText" maxlength="4000" placeholder="Type, or tap the microphone on the keyboard to dictate.">${esc(text)}</textarea>
@@ -535,9 +657,11 @@ async function openNote(id) {
       const t = text.trim();
       if (!t && !photos.length) return toast("Write a few words or add a photo first.", true);
       try {
-        if (editing) await put("notes", { ...editing, text: t, photos: (editing.photos || []).concat(photos), edited: Date.now() });
-        else await put("notes", { storeId: id, storeName: s.name, rep: S.rep, date: today(), ts: Date.now(), text: t, photos });
-        await refreshDone(); toast(editing ? "Note updated." : "Note saved on this store."); closeSheet();
+        if (editing && editing.remote) await put("notes", { storeId: id, storeName: s.name, rep: S.rep, date: editing.date, ts: Date.now(), text: t,
+          photos: (editing.photos || []).concat(photos), photoUrls: editing.photoUrls || [], ghlNoteId: editing.ghlNoteId, edited: Date.now(), sync: "pending" });
+        else if (editing) await put("notes", { ...editing, text: t, photos: (editing.photos || []).concat(photos), edited: Date.now(), sync: "pending" });
+        else await put("notes", { storeId: id, storeName: s.name, rep: S.rep, date: today(), ts: Date.now(), text: t, photos, sync: "pending" });
+        await refreshDone(); syncSoon(); toast(editing ? "Note updated." : "Note saved on this store."); closeSheet();
       } catch (x) { toast("The note could not be saved on this phone. Free some storage and try again.", true); }
     };
   };
@@ -677,8 +801,9 @@ async function openOrder(id) {
       if (how === "again") { toast("The file is ready. Tap the button once more."); return; }
       if (how === "cancelled" || how === "blocked") return;
       const rec = { storeId: id, storeName: s.name, rep: S.rep, repName: o.rep, date: o.date, ts: Date.now(), qty: o.qty, total: o.total, storeNo: o.storeNo, po: o.po, contact: o.contact, address: o.address };
+      rec.fileName = o.fileName; rec.sync = "pending";
       if (savedId != null) rec.id = savedId;
-      savedId = await put("orders", rec); sent = true;
+      savedId = await put("orders", rec); sent = true; syncSoon();
       S.meta[id] = Object.assign({}, S.meta[id], { storeNo: o.storeNo, contact: o.contact, address: o.address }); LS.set("storeMeta", S.meta);
       if (o.rep && o.rep !== S.rep) { /* rep name on the sheet only; the profile stays the same */ }
       await refreshDone();
@@ -797,6 +922,24 @@ $("#addStoreBtn").addEventListener("click", () => {
   };
 });
 
+/* ---------- GoHighLevel settings ---------- */
+function paintApi() { $("#apiUrl").value = API.url(); $("#apiKey").value = API.key(); paintSync(); }
+$("#ghlConnect").addEventListener("click", async e => {
+  const url = $("#apiUrl").value.trim().replace(/\/+$/, ""), key = $("#apiKey").value.trim();
+  if (!/^https:\/\//.test(url)) return toast("The service address must start with https://", true);
+  if (!key) return toast("Type the app password you set in Render.", true);
+  LS.set("apiUrl", url); LS.set("apiKey", key);
+  const b = e.target; b.disabled = true; b.textContent = "Testing… (can take a minute)";
+  try {
+    const r = await api("GET", "/api/check");
+    const probs = Object.entries(r).filter(([k, v]) => !/^(ok|set)/.test(String(v)));
+    if (probs.length) toast(probs.map(([k, v]) => `${k}: ${v}`).join(" · "), true);
+    else { toast("Connected to GoHighLevel."); syncSoon(); }
+  } catch (x) { toast(x.message, true); }
+  finally { b.disabled = false; b.textContent = "Connect and test"; paintSync(); }
+});
+$("#ghlSync").addEventListener("click", () => syncAll(true));
+
 /* ---------- start ---------- */
 document.querySelector(".tabs").addEventListener("click", e => { const b = e.target.closest("[data-tab]"); if (b) setTab(b.dataset.tab); });
 window.addEventListener("resize", () => map && map.invalidateSize());
@@ -807,7 +950,9 @@ window.addEventListener("resize", () => map && map.invalidateSize());
   renderStores(); refreshMarkers(true);
   if (infoOk()) measureSoon();
   geocodeAll();
+  paintApi(); await countPending();
+  if (connected()) { fetch(API.url() + "/health").catch(() => {}); syncSoon(); }
   if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
 })();
-window.__fr = { S, solveLoop };   // for support and testing
+window.__fr = { S, solveLoop, syncAll, G };   // for support and testing
 })();
