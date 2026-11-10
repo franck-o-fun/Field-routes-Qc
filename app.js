@@ -763,7 +763,7 @@ async function openOrder(id) {
       <input type="number" inputmode="numeric" min="0" max="999" step="1" value="${qty[p.id] || 0}" aria-label="Quantity ${esc(p.name)}">
       <button type="button" data-d="1" aria-label="One more ${esc(p.name)}">+</button></div></div>`).join("")).join("")}`,
     `<div class="total-row"><div><div class="label">Total</div><div class="min-msg" id="oMin"></div></div><div class="big" id="oTotal"></div></div>
-     <div class="row gap"><button class="btn" id="oXlsx" type="button">Excel</button><button class="btn primary" id="oSend" type="button" style="flex:2">Send order</button></div>
+     <div class="row gap"><button class="btn" id="oXlsx" type="button">Preview</button><button class="btn primary" id="oSend" type="button" style="flex:2">Send order</button></div>
      <div class="hint">Send to ${esc(C.orderEmail)}</div>`,
     () => { clearTimeout(buildT); if (sent) { delete S.drafts[id]; LS.set("drafts", S.drafts); } });
 
@@ -800,6 +800,7 @@ async function openOrder(id) {
       const how = await deliver(blob, o.fileName);
       if (how === "again") { toast("The file is ready. Tap the button once more."); return; }
       if (how === "cancelled" || how === "blocked") return;
+       if (btn.id === "oXlsx") { toast("Preview only. Nothing was saved or sent to GoHighLevel. Tap Send order when it is right."); return; }
       const rec = { storeId: id, storeName: s.name, rep: S.rep, repName: o.rep, date: o.date, ts: Date.now(), qty: o.qty, total: o.total, storeNo: o.storeNo, po: o.po, contact: o.contact, address: o.address };
       rec.fileName = o.fileName; rec.sync = "pending";
       if (savedId != null) rec.id = savedId;
