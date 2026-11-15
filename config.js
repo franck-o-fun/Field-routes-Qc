@@ -40,8 +40,9 @@ window.FR_CONFIG = {
       id: "ecotrend",
       name: "Ecotrend",
       orderEmail: "francois@magnoliamedia.ca",   // replace with Ecotrend's order inbox
-      minimum: 0,                                // 0 = no minimum shown
+      minimum: 350,                              // Ecotrend minimum order, in dollars
       kind: "catalog",                           // full catalog read from the order form itself
+      compact: true,                             // the sent Excel keeps only the ordered products
       // The Excel order form, as Ecotrend sends it. To update prices or products, replace this file.
       formFile: "ecotrend-form.xlsx",
       firstRow: 7,

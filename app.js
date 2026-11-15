@@ -737,6 +737,58 @@ function sheetEditor(doc) {
   };
   return { rowOf, cellOf, set };
 }
+// Catalog forms: keep the header rows, then only the ordered products (under their brand line), then the total.
+async function compactSheet(doc, zip, co, o) {
+  const data = doc.getElementsByTagNameNS(NS, "sheetData")[0];
+  const rows = [...data.getElementsByTagNameNS(NS, "row")];
+  const rn = r => +r.getAttribute("r");
+  const cell = (row, col) => [...row.getElementsByTagNameNS(NS, "c")].find(c => c.getAttribute("r").replace(/\d+/g, "") === col);
+  const hasVal = c => !!(c && (c.getElementsByTagNameNS(NS, "v")[0] || c.getElementsByTagNameNS(NS, "is")[0] || c.getElementsByTagNameNS(NS, "f")[0]) && c.textContent.trim() !== "");
+  const qtyCol = co.orderForm.qtyColumn, codeCol = co.columns.code, priceCol = co.columns.price, totalCol = String.fromCharCode(qtyCol.charCodeAt(0) + 1);
+  const orderedRows = new Set(Object.entries(o.qty).filter(([, n]) => n > 0).map(([id]) => co.byId.get(id)).filter(p => p && p.row).map(p => p.row));
+  const totalRow = rows.find(r => rn(r) > co.firstRow && [...r.getElementsByTagNameNS(NS, "f")].some(f => /^SUM\(/i.test(f.textContent)));
+  const keep = [], used = new Set(); let header = null;
+  for (const r of rows) {
+    const n = rn(r);
+    if (n < co.firstRow) { keep.push(r); continue; }
+    if (r === totalRow) break;
+    const isHeader = !hasVal(cell(r, codeCol)) && hasVal(cell(r, "A"));
+    if (isHeader) { header = r; continue; }
+    if (orderedRows.has(n)) { if (header && !used.has(header)) { keep.push(header); used.add(header); } keep.push(r); }
+  }
+  const firstProduct = co.firstRow; let next = 1, lastLine = co.firstRow, grand = 0;
+  for (const r of rows) if (!keep.includes(r) && r !== totalRow) data.removeChild(r);
+  const renumber = (r, n) => { r.setAttribute("r", n); for (const c of r.getElementsByTagNameNS(NS, "c")) c.setAttribute("r", c.getAttribute("r").replace(/\d+/g, "") + n); };
+  const setFormula = (c, f, v) => { while (c.firstChild) c.removeChild(c.firstChild); c.removeAttribute("t"); const fe = doc.createElementNS(NS, "f"); fe.textContent = f; const ve = doc.createElementNS(NS, "v"); ve.textContent = String(v); c.appendChild(fe); c.appendChild(ve); };
+  for (const r of keep) {
+    const old = rn(r), n = old < co.firstRow ? old : Math.max(next, co.firstRow);
+    renumber(r, n); next = n + 1;
+    if (orderedRows.has(old)) {
+      const price = Number((cell(r, priceCol) || {}).textContent) || 0, q = Number((cell(r, qtyCol) || {}).textContent) || 0, line = cents(price * q);
+      const tc = cell(r, totalCol); if (tc) setFormula(tc, `${priceCol}${n}*${qtyCol}${n}`, line);
+      grand += line; lastLine = n;
+    }
+  }
+  if (totalRow) {
+    renumber(totalRow, next);
+    const tc = [...totalRow.getElementsByTagNameNS(NS, "c")].find(c => c.getElementsByTagNameNS(NS, "f")[0]);
+    if (tc) setFormula(tc, `SUM(${totalCol}${firstProduct}:${totalCol}${lastLine})`, cents(grand));
+    while (totalRow.nextSibling) data.removeChild(totalRow.nextSibling);
+  }
+  const last = next;
+  const setAttr = (tag, attr, val) => { const e = doc.getElementsByTagNameNS(NS, tag)[0]; if (e) e.setAttribute(attr, val); };
+  const dim = doc.getElementsByTagNameNS(NS, "dimension")[0]; if (dim) dim.setAttribute("ref", dim.getAttribute("ref").replace(/\d+$/, last));
+  const af = doc.getElementsByTagNameNS(NS, "autoFilter")[0]; if (af) af.setAttribute("ref", af.getAttribute("ref").replace(/\d+$/, last));
+  setAttr("pane", "topLeftCell", "A" + co.firstRow);
+  const sel = doc.getElementsByTagNameNS(NS, "selection")[0]; if (sel) { sel.setAttribute("activeCell", qtyCol + co.firstRow); sel.setAttribute("sqref", qtyCol + co.firstRow); }
+  // Cell positions changed: drop Excel's calculation cache so it rebuilds it.
+  if (zip.file("xl/calcChain.xml")) {
+    zip.remove("xl/calcChain.xml");
+    const rel = "xl/_rels/workbook.xml.rels", ct = "[Content_Types].xml";
+    if (zip.file(rel)) zip.file(rel, (await zip.file(rel).async("string")).replace(/<Relationship [^>]*calcChain[^>]*\/>/, ""));
+    if (zip.file(ct)) zip.file(ct, (await zip.file(ct).async("string")).replace(/<Override [^>]*calcChain[^>]*\/>/, ""));
+  }
+}
 async function buildOrderXlsx(o, co) {
   co = co || company(o.companyId);
   const zip = await JSZip.loadAsync(co.kind === "catalog" ? co.formBuf : b64buf(window[co.template])), path = "xl/worksheets/sheet1.xml";
@@ -758,6 +810,7 @@ async function buildOrderXlsx(o, co) {
     ed.set("G" + r, p.formLine.description, st("G")); ed.set("H" + r, p.formLine.caseQty, st("H")); ed.set("I" + r, p.formLine.format, st("I"));
     ed.set("J" + r, p.price, st("J")); ed.set("K" + r, q, st("K"));
   }
+  if (co.compact) await compactSheet(doc, zip, co, o);
   let xml = new XMLSerializer().serializeToString(doc);
   if (!xml.startsWith("<?xml")) xml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' + xml;
   zip.file(path, xml);
@@ -911,6 +964,10 @@ async function openOrder(id, coId) {
       rec.fileName = o.fileName; rec.sync = "pending";
       if (savedId != null) rec.id = savedId;
       savedId = await put("orders", rec); sent = true; syncSoon();
+      // Sent: start the next order for this store from zero ("Last order" can reload it).
+      for (const k of Object.keys(qty)) delete qty[k];
+      delete S.drafts[dkey]; delete S.drafts[id]; LS.set("drafts", S.drafts);
+      savedId = null; sent = false; ready = null; view = "browse"; renderCat();
       S.meta[id] = Object.assign({}, S.meta[id], co.id === "reboot" ? { storeNo: o.storeNo, contact: o.contact, address: o.address } : { contact: o.contact }); LS.set("storeMeta", S.meta);
       await refreshDone();
       toast(how === "shared" ? `Order saved on the store. In Mail, send it to ${co.orderEmail}.` : `Excel downloaded and order saved. Email it to ${co.orderEmail}.`);
@@ -1036,7 +1093,7 @@ $("#addStoreBtn").addEventListener("click", () => {
 });
 
 /* ---------- GoHighLevel settings ---------- */
-function paintApi() { $("#appVersion").textContent = "La Run version 8"; $("#crmTitle").textContent = CRM; $("#apiUrl").value = API.url(); $("#apiKey").value = API.key(); paintSync(); }
+function paintApi() { $("#appVersion").textContent = "La Run version 10"; $("#crmTitle").textContent = CRM; $("#apiUrl").value = API.url(); $("#apiKey").value = API.key(); paintSync(); }
 $("#ghlConnect").addEventListener("click", async e => {
   const url = $("#apiUrl").value.trim().replace(/\/+$/, ""), key = $("#apiKey").value.trim();
   if (!/^https:\/\//.test(url)) return toast("The service address must start with https://", true);
