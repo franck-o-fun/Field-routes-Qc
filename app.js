@@ -828,7 +828,7 @@ async function openOrder(id, coId) {
       ${field(f.rep, "oRep", "Rep", head.rep)}</div></details>
     ${catalog ? `<div class="cat-tools">
       <input id="cSearch" type="search" placeholder="Product, code, brand or barcode" autocomplete="off" aria-label="Search the catalog">
-      <select id="cBrand" aria-label="Brand"><option value="">All brands</option>${brands.map(b => `<option>${esc(b)}</option>`).join("")}</select>
+      <select id="cBrand" aria-label="Brand"><option value="">All brands</option>${brands.map(b => `<option value="${esc(b)}">${esc(b)}</option>`).join("")}</select>
       <div class="row gap"><button class="btn small" id="cMine" type="button"></button><button class="btn small" id="cLast" type="button">Last order</button></div></div>
       <div id="cList"></div>` : fixedList()}`,
     `<div class="total-row"><div><div class="label">Total</div><div class="min-msg" id="oMin"></div></div><div class="big" id="oTotal"></div></div>
@@ -862,7 +862,11 @@ async function openOrder(id, coId) {
     $("#oTotal").textContent = money(total);
     const mm = $("#oMin"), send = $("#oSend"), n = Object.values(qty).reduce((a, b) => a + b, 0);
     document.querySelectorAll("#sheetContent .prod").forEach(el => { const k = qty[el.dataset.p] || 0; el.classList.toggle("has", k > 0); const inp = el.querySelector("input"); if (document.activeElement !== inp) inp.value = k; });
-    if (catalog) $("#cMine").textContent = `In this order (${Object.keys(qty).length})`;
+    if (catalog) {
+      $("#cMine").textContent = `In this order (${Object.keys(qty).length})`;
+      const per = {}; for (const [k, n] of Object.entries(qty)) { const p = co.byId.get(k); if (p) per[p.group] = (per[p.group] || 0) + n; }
+      for (const o of $("#cBrand").options) if (o.value) o.textContent = o.value + (per[o.value] ? ` (${per[o.value]} in order)` : "");
+    }
     if (total <= 0) { mm.className = "min-msg"; mm.textContent = "Add a product to send."; send.textContent = "Send order"; send.className = "btn primary"; send.disabled = true; $("#oXlsx").disabled = true; }
     else if (min > 0 && total < min) { mm.className = "min-msg under"; mm.textContent = `${money(cents(min - total))} missing to reach ${money(min)}`; send.textContent = "Send anyway"; send.className = "btn warn"; send.disabled = false; $("#oXlsx").disabled = false; }
     else { mm.className = "min-msg ok"; mm.textContent = min > 0 ? `Minimum of ${money(min)} reached` : `${n} unit${n === 1 ? "" : "s"}, ${Object.keys(qty).length} product${Object.keys(qty).length === 1 ? "" : "s"}`; send.textContent = "Send order"; send.className = "btn primary"; send.disabled = false; $("#oXlsx").disabled = false; }
@@ -881,12 +885,13 @@ async function openOrder(id, coId) {
     }
   };
   $("#sheetContent").oninput = e => {
-    if (e.target.id === "cSearch") { q = e.target.value; view = "browse"; return renderCat(); }
+    if (e.target.id === "cSearch") { q = e.target.value; if (q.trim() && brand) { brand = ""; $("#cBrand").value = ""; } view = "browse"; return renderCat(); }
     const pr = e.target.closest(".prod"); if (pr) return setQty(pr.dataset.p, e.target.value);
     if (e.target.closest(".fold")) prebuild();
   };
-  $("#sheetContent").onchange = e => { if (e.target.id === "cBrand") { brand = e.target.value; view = "browse"; renderCat(); } };
+  $("#sheetContent").onchange = e => { if (e.target.id === "cBrand") { brand = e.target.value; q = ""; $("#cSearch").value = ""; view = "browse"; renderCat(); } };
   $("#sheetContent").addEventListener("focusout", e => { if (e.target.closest(".prod")) paint(); });
+  $("#sheetContent").addEventListener("focusin", e => { if (e.target.matches(".prod input")) setTimeout(() => { try { e.target.select(); } catch (x) {} }, 0); });
   $("#sheetFoot").onclick = async e => {
     if (e.target.id !== "oSend" && e.target.id !== "oXlsx") return;
     const o = snapshot();
@@ -1031,7 +1036,7 @@ $("#addStoreBtn").addEventListener("click", () => {
 });
 
 /* ---------- GoHighLevel settings ---------- */
-function paintApi() { $("#appVersion").textContent = "La Run version 7"; $("#crmTitle").textContent = CRM; $("#apiUrl").value = API.url(); $("#apiKey").value = API.key(); paintSync(); }
+function paintApi() { $("#appVersion").textContent = "La Run version 8"; $("#crmTitle").textContent = CRM; $("#apiUrl").value = API.url(); $("#apiKey").value = API.key(); paintSync(); }
 $("#ghlConnect").addEventListener("click", async e => {
   const url = $("#apiUrl").value.trim().replace(/\/+$/, ""), key = $("#apiKey").value.trim();
   if (!/^https:\/\//.test(url)) return toast("The service address must start with https://", true);
