@@ -31,3 +31,9 @@ self-hosted equivalents.
 ORDER FORM CELLS (config.js > orderForm)
 Store name D4, store number E5, PO D5, address G5, rep H5, contact D6, quantities K9-K16.
 Caramel sale is added on row 17 only when ordered, product codes blank.
+
+RENDER.COM
+render.yaml sets this up as a free Render static site (no build, no server).
+Push this folder to a GitHub repo with index.html at the top level, then in Render:
+New > Blueprint > pick the repo > Apply. Every push to the repo redeploys.
+Remember to change VERSION in sw.js with each update.

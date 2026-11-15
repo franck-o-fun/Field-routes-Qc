@@ -3,6 +3,7 @@
 "use strict";
 
 const C = window.FR_CONFIG;
+const CRM = C.crmName || "the CRM";   // brand name shown for the CRM (white label)
 const XLSX_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 const $ = s => document.querySelector(s);
 const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -500,7 +501,7 @@ function paintSync() {
   const el = $("#ghlStatus"); if (el) {
     el.textContent = !connected() ? "Not connected. Notes and orders stay on this phone." :
       G.running ? "Syncing…" : G.error ? `${G.pending} waiting to sync. ${G.error}` :
-      G.pending ? `${G.pending} waiting to sync.` : "Connected. Everything is synced to GoHighLevel.";
+      G.pending ? `${G.pending} waiting to sync.` : `Connected. Everything is synced to ${CRM}.`;
   }
   renderCount();
 }
@@ -515,12 +516,13 @@ async function syncNote(r) {
 async function syncOrder(r) {
   const contactId = await contactFor(r.storeId, true);
   const s = byId.get(r.storeId);
-  const o = { storeName: r.storeName, storeNo: r.storeNo, po: r.po, address: r.address, rep: r.repName || r.rep, contact: r.contact, qty: r.qty };
-  const fileName = r.fileName || `Bon de commande ${safeName((s ? label(s) : r.storeName).replace("#", ""))} ${r.date}.xlsx`;
-  const xlsx = r.fileUrl ? null : await blobToDataUrl(await buildOrderXlsx(o));
-  const lines = C.products.filter(p => (r.qty[p.id] || 0) > 0).map(p => ({ name: p.name, size: p.size, qty: r.qty[p.id], price: p.price }));
+  const co = company(r.companyId || "reboot"); await loadCatalog(co);
+  const o = { companyId: co.id, storeName: r.storeName, storeNo: r.storeNo, po: r.po, address: r.address, rep: r.repName || r.rep, contact: r.contact, phone: r.phone, email: r.email, qty: r.qty };
+  const fileName = r.fileName || (s ? orderFileName(co, s, r.date) : `Bon de commande ${r.date}.xlsx`);
+  const xlsx = r.fileUrl ? null : await blobToDataUrl(await buildOrderXlsx(o, co));
+  const lines = r.lines || Object.entries(r.qty).map(([k, n]) => { const p = co.byId.get(k); return p ? { code: p.code || "", name: p.name, size: p.size || "", qty: n, price: p.price } : null; }).filter(Boolean);
   const out = await api("POST", "/api/order", { contactId, noteId: r.ghlNoteId || null, opportunityId: r.opportunityId || null, fileUrl: r.fileUrl || null,
-    xlsx, fileName, date: r.date, rep: o.rep, po: r.po, contact: r.contact, storeName: s ? label(s) : r.storeName, lines, total: r.total, minimum: C.minimumOrder });
+    xlsx, fileName, date: r.date, rep: o.rep, po: r.po, contact: r.contact, storeName: `${co.name} · ${s ? label(s) : r.storeName}`, company: co.name, productFields: co.productFields !== false, lines, total: r.total, minimum: co.minimum || 0 });
   Object.assign(r, { ghlNoteId: out.noteId, opportunityId: out.opportunityId || null, fileUrl: out.fileUrl || r.fileUrl, sync: "done", syncedAt: Date.now() });
   await put("orders", r);
   if (out.warning) toast(out.warning, true);
@@ -544,7 +546,7 @@ async function syncAll(manual) {
   } catch (e) { G.error = "Saved data could not be read."; }
   G.running = false; G.last = Date.now();
   await countPending();
-  if (manual) toast(G.error ? G.error : done ? `${done} item${done === 1 ? "" : "s"} sent to GoHighLevel.` : "Nothing waiting. Everything is synced.", !!G.error);
+  if (manual) toast(G.error ? G.error : done ? `${done} item${done === 1 ? "" : "s"} sent to ${CRM}.` : "Nothing waiting. Everything is synced.", !!G.error);
   clearTimeout(G.timer);
   if (G.pending && connected()) G.timer = setTimeout(() => syncAll(), G.error ? 120000 : 5000);
 }
@@ -602,8 +604,8 @@ async function openStore(id) {
       ${s.email ? `<div class="hint">${esc(s.email)}</div>` : ""}</div>
     <div class="grid2"><button class="btn primary" data-go="order">Order</button><button class="btn primary" data-go="note">Note</button></div>
     <button class="btn" data-go="route">${inR ? "Remove from route" : "Add to route"}</button>
-    <div class="card"><h2>Last visit</h2>${lastN ? `<div class="hint">${niceDate(lastN.date)}${lastN.remote ? " · from GoHighLevel" + (lastN.rep ? ", " + esc(lastN.rep) : "") : ""}</div><div class="note-last">${esc(lastN.text)}</div>${photosHtml(lastN.photos)}` : `<p class="hint">No earlier note.</p>`}</div>
-    <div class="card"><h2>Orders</h2>${orders.length ? `<div class="hist">${orders.slice(0, 8).map(o => `<div class="h"><b>${money(o.total)}</b>${o.total < C.minimumOrder ? " · under minimum" : ""}<small>${niceDate(o.date)}${o.po ? " · PO " + esc(o.po) : ""}</small></div>`).join("")}</div>` : `<p class="hint">No order saved for this store yet.</p>`}</div>
+    <div class="card"><h2>Last visit</h2>${lastN ? `<div class="hint">${niceDate(lastN.date)}${lastN.remote ? " · from " + CRM + (lastN.rep ? ", " + esc(lastN.rep) : "") : ""}</div><div class="note-last">${esc(lastN.text)}</div>${photosHtml(lastN.photos)}` : `<p class="hint">No earlier note.</p>`}</div>
+    <div class="card"><h2>Orders</h2>${orders.length ? `<div class="hist">${orders.slice(0, 8).map(o => { const co = company(o.companyId || "reboot"); return `<div class="h"><b>${esc(co.name)} · ${money(o.total)}</b>${co.minimum && o.total < co.minimum ? " · under minimum" : ""}<small>${niceDate(o.date)}${o.po ? " · PO " + esc(o.po) : ""}</small></div>`; }).join("")}</div>` : `<p class="hint">No order saved for this store yet.</p>`}</div>
     ${notes.filter(n => n !== lastN).length ? `<div class="card"><h2>Earlier notes</h2><div class="hist">${notes.filter(n => n !== lastN).slice(0, 7).map(n => `<div class="h"><small>${niceDate(n.date)}</small><div class="note-last">${esc(n.text)}</div></div>`).join("")}</div></div>` : ""}`);
   $("#sheetContent").onclick = e => {
     const b = e.target.closest("[data-go]"); if (!b) return;
@@ -631,7 +633,7 @@ async function openNote(id) {
   const last = await lastNoteFor(id).catch(() => null); let editing = null, photos = [], text = "";
   const draw = () => {
     openSheet("Note · " + s.name, `
-      <div class="card"><h2>Last visit</h2>${last ? `<div class="hint">${niceDate(last.date)}${last.remote ? " · from GoHighLevel" : ""}</div><div class="note-last">${esc(last.text)}</div>${photosHtml(last.photos)}
+      <div class="card"><h2>Last visit</h2>${last ? `<div class="hint">${niceDate(last.date)}${last.remote ? " · from " + CRM : ""}</div><div class="note-last">${esc(last.text)}</div>${photosHtml(last.photos)}
         ${editing ? "" : `<button class="btn small" type="button" id="nEdit">Edit</button>`}` : `<p class="hint">No earlier note.</p>`}</div>
       <div class="card"><h2>${editing ? "Edit the last note" : "What happened"}</h2>
         <textarea id="nText" maxlength="4000" placeholder="Type, or tap the microphone on the keyboard to dictate.">${esc(text)}</textarea>
@@ -671,7 +673,43 @@ async function openNote(id) {
 /* ---------- order ---------- */
 function b64buf(b64) { const bin = atob(b64), u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return u.buffer; }
 const safeName = s => String(s).replace(/[\\/:*?"<>|]+/g, " ").replace(/\s+/g, " ").trim();
-const orderTotal = q => cents(C.products.reduce((t, p) => t + (q[p.id] || 0) * p.price, 0));
+/* ---------- companies and catalogs ---------- */
+const COMPANIES = C.companies.map(co => Object.assign({}, co, { products: co.products || [], byId: new Map((co.products || []).map(p => [p.id, p])) }));
+const company = id => COMPANIES.find(c => c.id === id) || COMPANIES[0];
+const catalogs = {};
+// A catalog company's products are read from its own Excel order form: one row per product.
+function loadCatalog(co) {
+  if (co.kind !== "catalog") return Promise.resolve(co);
+  if (catalogs[co.id]) return catalogs[co.id];
+  catalogs[co.id] = (async () => {
+    const r = await fetch(co.formFile); if (!r.ok) throw new Error("form " + r.status);
+    const buf = await r.arrayBuffer(), zip = await JSZip.loadAsync(buf);
+    const dom = x => new DOMParser().parseFromString(x, "application/xml");
+    const sst = zip.file("xl/sharedStrings.xml") ? [...dom(await zip.file("xl/sharedStrings.xml").async("string")).getElementsByTagNameNS(NS, "si")]
+      .map(si => [...si.getElementsByTagNameNS(NS, "t")].map(t => t.textContent).join("")) : [];
+    const sheet = dom(await zip.file("xl/worksheets/sheet1.xml").async("string"));
+    const col = co.columns, products = [];
+    for (const row of sheet.getElementsByTagNameNS(NS, "row")) {
+      const rn = +row.getAttribute("r"); if (rn < co.firstRow) continue;
+      const v = {};
+      for (const c of row.getElementsByTagNameNS(NS, "c")) {
+        const letters = c.getAttribute("r").replace(/\d+/g, ""), t = c.getAttribute("t");
+        const ve = c.getElementsByTagNameNS(NS, "v")[0], ie = c.getElementsByTagNameNS(NS, "t")[0];
+        v[letters] = t === "s" ? sst[+(ve && ve.textContent)] : t === "inlineStr" ? (ie && ie.textContent) : ve ? ve.textContent : "";
+      }
+      const code = String(v[col.code] || "").trim(), price = Number(v[col.price]) || 0;
+      if (!code || !(price > 0)) continue;                      // brand headers and unpriced items are not orderable
+      products.push({ id: code, code, group: String(v[col.brand] || "").trim(), name: String(v[col.name] || "").trim(), upc: String(v[col.upc] || "").trim(),
+        price, srp: Number(v[col.srp]) || 0, map: Number(v[col.map]) || 0, row: rn, by: "unit", size: "" });
+    }
+    co.products = products; co.byId = new Map(products.map(p => [p.id, p])); co.formBuf = buf;
+    return co;
+  })().catch(e => { delete catalogs[co.id]; throw e; });
+  return catalogs[co.id];
+}
+const orderTotal = (q, co) => cents(Object.entries(q).reduce((t, [id, n]) => { const p = co.byId.get(id); return t + (p ? n * p.price : 0); }, 0));
+const orderFileName = (co, s, date) => co.id === "reboot" ? `Bon de commande ${safeName(label(s).replace("#", ""))} ${date}.xlsx`
+  : `Bon de commande ${co.name} ${safeName(label(s).replace("#", ""))} ${date}.xlsx`;
 // The brand's own form is patched in place (cells only), so the logo, fonts and layout stay exactly as head office made them.
 const NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
 const colNum = ref => { let n = 0; for (const ch of ref.replace(/\d+/g, "")) n = n * 26 + ch.charCodeAt(0) - 64; return n; };
@@ -699,22 +737,23 @@ function sheetEditor(doc) {
   };
   return { rowOf, cellOf, set };
 }
-async function buildOrderXlsx(o) {
-  const zip = await JSZip.loadAsync(b64buf(window.ORDER_TEMPLATE_B64)), path = "xl/worksheets/sheet1.xml";
+async function buildOrderXlsx(o, co) {
+  co = co || company(o.companyId);
+  const zip = await JSZip.loadAsync(co.kind === "catalog" ? co.formBuf : b64buf(window[co.template])), path = "xl/worksheets/sheet1.xml";
   const doc = new DOMParser().parseFromString(await zip.file(path).async("string"), "application/xml");
   if (doc.getElementsByTagName("parsererror").length) throw new Error("template");
-  const ed = sheetEditor(doc), f = C.orderForm, put1 = (ref, v) => { if (v !== "" && v != null) ed.set(ref, v); };
-  put1(f.storeName, o.storeName); put1(f.storeNumber, /^\d{1,9}$/.test(o.storeNo) ? Number(o.storeNo) : o.storeNo);
-  put1(f.po, o.po); put1(f.address, o.address); put1(f.rep, o.rep); put1(f.contact, o.contact);
+  const ed = sheetEditor(doc), f = co.orderForm, put1 = (ref, v) => { if (ref && v !== "" && v != null) ed.set(ref, v); };
+  put1(f.storeName, o.storeName); put1(f.storeNumber, /^\d{1,9}$/.test(o.storeNo || "") ? Number(o.storeNo) : o.storeNo);
+  put1(f.po, o.po); put1(f.address, o.address); put1(f.rep, o.rep); put1(f.contact, o.contact); put1(f.phone, o.phone); put1(f.email, o.email);
   let extra = f.extraRow;
-  for (const p of C.products) {
-    const q = o.qty[p.id] || 0; if (q <= 0) continue;                       // zero stays blank
+  for (const [pid, q] of Object.entries(o.qty)) {
+    const p = co.byId.get(pid); if (!p || !(q > 0)) continue;   // zero stays blank
     if (p.row) { ed.set(f.qtyColumn + p.row, q); continue; }
     const r = extra++, src = ed.rowOf(r - 1), row = ed.rowOf(r);            // product not printed on the form: add its line, codes blank
     if (src.getAttribute("ht")) { row.setAttribute("ht", src.getAttribute("ht")); row.setAttribute("customHeight", "1"); }
-    const st = col => { const c = [...src.getElementsByTagNameNS(NS, "c")].find(x => x.getAttribute("r") === col + (r - 1)); return c ? c.getAttribute("s") : null; };
+    const st = c => { const x = [...src.getElementsByTagNameNS(NS, "c")].find(y => y.getAttribute("r") === c + (r - 1)); return x ? x.getAttribute("s") : null; };
     const fv = [...src.getElementsByTagNameNS(NS, "c")].find(x => x.getAttribute("r") === "F" + (r - 1));
-    "ABCDE".split("").forEach(col => ed.set(col + r, "", st(col)));
+    "ABCDE".split("").forEach(c => ed.set(c + r, "", st(c)));
     ed.set("F" + r, fv && fv.textContent ? Number(fv.textContent) : "", st("F"));
     ed.set("G" + r, p.formLine.description, st("G")); ed.set("H" + r, p.formLine.caseQty, st("H")); ed.set("I" + r, p.formLine.format, st("I"));
     ed.set("J" + r, p.price, st("J")); ed.set("K" + r, q, st("K"));
@@ -722,6 +761,9 @@ async function buildOrderXlsx(o) {
   let xml = new XMLSerializer().serializeToString(doc);
   if (!xml.startsWith("<?xml")) xml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' + xml;
   zip.file(path, xml);
+  // Line totals are formulas in the form: ask Excel to recalculate them when the file opens.
+  const wbx = zip.file("xl/workbook.xml");
+  if (wbx) { let w = await wbx.async("string"); w = /<calcPr\b/.test(w) ? w.replace(/<calcPr\b(?![^>]*fullCalcOnLoad)/, '<calcPr fullCalcOnLoad="1"') : w.replace("</workbook>", '<calcPr fullCalcOnLoad="1"/></workbook>'); zip.file("xl/workbook.xml", w); }
   return zip.generateAsync({ type: "blob", mimeType: XLSX_TYPE, compression: "DEFLATE" });
 }
 const isTouch = () => /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent));
@@ -743,50 +785,107 @@ async function deliver(blob, name) {
   if (isTouch() && standalone()) { toast("Mail will not open from the Home Screen icon. Open this site in Safari and send again.", true); return "blocked"; }
   download(blob, name); return "downloaded";
 }
-async function openOrder(id) {
-  const s = byId.get(id), m = S.meta[id] || {};
-  const qty = Object.assign({}, S.drafts[id] || {});
-  const head = { address: m.address != null ? m.address : [s.address, s.city, s.postal].filter(Boolean).join(", "), storeNo: m.storeNo != null ? m.storeNo : (s.storeNo || ""), po: "", contact: m.contact != null ? m.contact : (s.contact || ""), rep: S.rep };
-  let savedId = null, ready = null, buildT = null, sent = false;
-  const groups = [...new Set(C.products.map(p => p.group))];
-  openSheet("Order · " + s.name, `
-    <div class="addr"><b>${esc(s.name)}</b><br>${esc([s.address, s.city].filter(Boolean).join(", ") || "No street address")}</div>
-    <details class="fold"><summary>Order sheet details</summary><div class="in">
-      <div class="field"><label for="oAddr">Address printed on the sheet</label><input id="oAddr" type="text" value="${esc(head.address)}"></div>
-      <div class="grid2"><div class="field"><label for="oNo">Store number</label><input id="oNo" type="text" inputmode="numeric" value="${esc(head.storeNo)}"></div>
-      <div class="field"><label for="oPo">PO</label><input id="oPo" type="text" value=""></div></div>
-      <div class="field"><label for="oContact">Contact at the store</label><input id="oContact" type="text" value="${esc(head.contact)}"></div>
-      <div class="field"><label for="oRep">Rep</label><input id="oRep" type="text" value="${esc(head.rep)}"></div></div></details>
-    ${groups.map(g => `<div class="grp">${esc(g)}, by the ${C.products.find(p => p.group === g).by}</div>` + C.products.filter(p => p.group === g).map(p => `
-      <div class="prod" data-p="${esc(p.id)}"><div class="pt"><div class="pn">${esc(p.name)}</div><div class="pp">${esc(p.size)} · ${money(p.price)} ${p.by === "case" ? "a case" : "each"}</div></div>
+function pickCompany(id) {
+  const s = byId.get(id), last = (LS.get("lastCompany", {}))[id];
+  openSheet("Order · " + s.name, `<div class="addr"><b>${esc(s.name)}</b><br>${esc([s.address, s.city].filter(Boolean).join(", ") || "No street address")}</div>
+    <p class="hint">Which company is this order for?</p>
+    ${COMPANIES.map(co => `<button class="btn ${co.id === last ? "primary" : ""} big-pick" type="button" data-co="${esc(co.id)}">${esc(co.name)}</button>`).join("")}`);
+  $("#sheetContent").onclick = e => { const b = e.target.closest("[data-co]"); if (b) openOrder(id, b.dataset.co); };
+}
+async function openOrder(id, coId) {
+  if (!coId) { if (COMPANIES.length > 1) return pickCompany(id); coId = COMPANIES[0].id; }
+  const co = company(coId), s = byId.get(id), m = S.meta[id] || {};
+  if (co.kind === "catalog" && !co.byId.size) {
+    openSheet(`${co.name} · ${s.name}`, `<p class="hint">Loading the ${esc(co.name)} catalog…</p>`);
+    try { await loadCatalog(co); } catch (e) { return toast(`The ${co.name} catalog could not load. Check your signal and try again.`, true); }
+  }
+  const lc = LS.get("lastCompany", {}); lc[id] = co.id; LS.set("lastCompany", lc);
+  const dkey = co.id + "|" + id, catalog = co.kind === "catalog", f = co.orderForm;
+  const qty = Object.assign({}, S.drafts[dkey] || (co.id === "reboot" ? S.drafts[id] : null) || {});
+  for (const k of Object.keys(qty)) if (!co.byId.has(k)) delete qty[k];
+  const head = { address: m.address != null ? m.address : [s.address, s.city, s.postal].filter(Boolean).join(", "), storeNo: m.storeNo != null ? m.storeNo : (s.storeNo || ""), po: "",
+    contact: m.contact != null ? m.contact : (s.contact || ""), rep: S.rep, phone: s.phone || "", email: s.email || "" };
+  let savedId = null, ready = null, buildT = null, sent = false, view = Object.keys(qty).length ? "order" : "browse", q = "", brand = "";
+  const field = (key, idv, lbl, val, extra) => key ? `<div class="field"><label for="${idv}">${lbl}</label><input id="${idv}" type="text" value="${esc(val)}" ${extra || ""}></div>` : "";
+  const prodRow = p => {
+    const margin = p.srp > 0 ? Math.round((p.srp - p.price) / p.srp * 100) : null;
+    const sub = catalog ? `${esc(p.group)} · ${esc(p.code)} · ${money(p.price)}${p.srp ? ` · PDSF ${money(p.srp)}` : ""}${margin != null ? ` · marge ${margin}%` : ""}`
+      : `${esc(p.size)} · ${money(p.price)} ${p.by === "case" ? "a case" : "each"}`;
+    return `<div class="prod" data-p="${esc(p.id)}"><div class="pt"><div class="pn">${esc(p.name)}</div><div class="pp">${sub}</div></div>
       <div class="step"><button type="button" data-d="-1" aria-label="One less ${esc(p.name)}">−</button>
       <input type="number" inputmode="numeric" min="0" max="999" step="1" value="${qty[p.id] || 0}" aria-label="Quantity ${esc(p.name)}">
-      <button type="button" data-d="1" aria-label="One more ${esc(p.name)}">+</button></div></div>`).join("")).join("")}`,
+      <button type="button" data-d="1" aria-label="One more ${esc(p.name)}">+</button></div></div>`;
+  };
+  const brands = catalog ? [...new Set(co.products.map(p => p.group))].sort((a, b) => a.localeCompare(b, "fr")) : [];
+  const fixedList = () => [...new Set(co.products.map(p => p.group))].map(g => `<div class="grp">${esc(g)}, by the ${co.products.find(p => p.group === g).by}</div>` + co.products.filter(p => p.group === g).map(prodRow).join("")).join("");
+  openSheet(`${co.name} · ${s.name}`, `
+    <div class="addr"><b>${esc(s.name)}</b><br>${esc([s.address, s.city].filter(Boolean).join(", ") || "No street address")}</div>
+    <details class="fold"><summary>Order sheet details</summary><div class="in">
+      ${field(f.address, "oAddr", "Address printed on the sheet", head.address)}
+      <div class="grid2">${field(f.storeNumber, "oNo", "Store number", head.storeNo, 'inputmode="numeric"')}${field(f.po, "oPo", "PO", "")}</div>
+      ${field(f.contact, "oContact", "Contact at the store", head.contact)}
+      ${field(f.phone, "oPhone", "Store phone", head.phone, 'inputmode="tel"')}${field(f.email, "oEmail", "Store email", head.email, 'inputmode="email"')}
+      ${field(f.rep, "oRep", "Rep", head.rep)}</div></details>
+    ${catalog ? `<div class="cat-tools">
+      <input id="cSearch" type="search" placeholder="Product, code, brand or barcode" autocomplete="off" aria-label="Search the catalog">
+      <select id="cBrand" aria-label="Brand"><option value="">All brands</option>${brands.map(b => `<option>${esc(b)}</option>`).join("")}</select>
+      <div class="row gap"><button class="btn small" id="cMine" type="button"></button><button class="btn small" id="cLast" type="button">Last order</button></div></div>
+      <div id="cList"></div>` : fixedList()}`,
     `<div class="total-row"><div><div class="label">Total</div><div class="min-msg" id="oMin"></div></div><div class="big" id="oTotal"></div></div>
      <div class="row gap"><button class="btn" id="oXlsx" type="button">Preview</button><button class="btn primary" id="oSend" type="button" style="flex:2">Send order</button></div>
-     <div class="hint">Send to ${esc(C.orderEmail)}</div>`,
-    () => { clearTimeout(buildT); if (sent) { delete S.drafts[id]; LS.set("drafts", S.drafts); } });
+     <div class="hint">Send to ${esc(co.orderEmail)}</div>`,
+    () => { clearTimeout(buildT); if (sent) { delete S.drafts[dkey]; delete S.drafts[id]; LS.set("drafts", S.drafts); } });
 
-  const readHead = () => { head.address = $("#oAddr").value.trim(); head.storeNo = $("#oNo").value.trim(); head.po = $("#oPo").value.trim(); head.contact = $("#oContact").value.trim(); head.rep = $("#oRep").value.trim(); };
-  const snapshot = () => { readHead(); const total = orderTotal(qty); const date = today();
-    return { storeId: id, storeName: s.name, date, qty: Object.assign({}, qty), total, ...head, fileName: `Bon de commande ${safeName(label(s).replace("#", ""))} ${date}.xlsx` }; };
-  const sig = o => JSON.stringify([o.qty, o.address, o.storeNo, o.po, o.contact, o.rep, o.date]);
-  const prebuild = () => { clearTimeout(buildT); buildT = setTimeout(async () => { const o = snapshot(); if (o.total <= 0) return; try { ready = { sig: sig(o), blob: await buildOrderXlsx(o) }; } catch (e) { ready = null; } }, 350); };
-  const paint = () => {
-    const total = orderTotal(qty), min = C.minimumOrder;
-    $("#oTotal").textContent = money(total);
-    const mm = $("#oMin"), send = $("#oSend");
-    document.querySelectorAll("#sheetContent .prod").forEach(el => { const q = qty[el.dataset.p] || 0; el.classList.toggle("has", q > 0); const inp = el.querySelector("input"); if (document.activeElement !== inp) inp.value = q; });
-    if (total <= 0) { mm.className = "min-msg"; mm.textContent = "Add a product to send."; send.textContent = "Send order"; send.className = "btn primary"; send.disabled = true; $("#oXlsx").disabled = true; }
-    else if (total < min) { mm.className = "min-msg under"; mm.textContent = `${money(cents(min - total))} missing to reach ${money(min)}`; send.textContent = "Send anyway"; send.className = "btn warn"; send.disabled = false; $("#oXlsx").disabled = false; }
-    else { mm.className = "min-msg ok"; mm.textContent = `Minimum of ${money(min)} reached`; send.textContent = "Send order"; send.className = "btn primary"; send.disabled = false; $("#oXlsx").disabled = false; }
+  const norm = x => String(x || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+  const renderCat = () => {
+    if (!catalog) return;
+    const n = Object.keys(qty).length;
+    $("#cMine").textContent = `In this order (${n})`; $("#cMine").className = "btn small" + (view === "order" ? " primary" : "");
+    let list, note = "";
+    if (view === "order") { list = co.products.filter(p => qty[p.id] > 0); if (!list.length) note = "Nothing in this order yet. Search a product or pick a brand."; }
+    else {
+      const words = norm(q).split(/\s+/).filter(Boolean), digits = q.replace(/\D/g, "");
+      if (!words.length && !brand) { list = []; note = `Search the ${co.products.length} products, or pick a brand.`; }
+      else list = co.products.filter(p => (!brand || p.group === brand) && (!words.length || words.every(w => norm(`${p.name} ${p.group} ${p.code}`).includes(w)) || (digits.length >= 4 && p.upc.replace(/\D/g, "").includes(digits))));
+    }
+    const cap = 80, more = list.length - cap;
+    $("#cList").innerHTML = (list.length ? list.slice(0, cap).map(prodRow).join("") : "") + (note ? `<p class="hint">${note}</p>` : "") + (more > 0 ? `<p class="hint">${more} more. Narrow the search.</p>` : "") + (view === "browse" && list.length === 0 && !note ? `<p class="hint">No product matches.</p>` : "");
   };
-  const setQty = (pid, v) => { v = Math.max(0, Math.min(999, Math.floor(Number(v) || 0))); if (v) qty[pid] = v; else delete qty[pid]; S.drafts[id] = qty; LS.set("drafts", S.drafts); paint(); prebuild(); };
-  $("#sheetContent").onclick = e => { const b = e.target.closest("[data-d]"); if (!b) return; const pid = b.closest(".prod").dataset.p; setQty(pid, (qty[pid] || 0) + +b.dataset.d); };
+  const v = idv => { const el = $("#" + idv); return el ? el.value.trim() : ""; };
+  const readHead = () => { head.address = v("oAddr"); head.storeNo = v("oNo"); head.po = v("oPo"); head.contact = v("oContact"); head.rep = v("oRep"); head.phone = v("oPhone"); head.email = v("oEmail"); };
+  const snapshot = () => { readHead(); const total = orderTotal(qty, co); const date = today();
+    return { storeId: id, companyId: co.id, storeName: s.name, date, qty: Object.assign({}, qty), total, ...head, fileName: orderFileName(co, s, date) }; };
+  const sig = o => JSON.stringify([o.qty, o.address, o.storeNo, o.po, o.contact, o.rep, o.phone, o.email, o.date]);
+  const prebuild = () => { clearTimeout(buildT); buildT = setTimeout(async () => { const o = snapshot(); if (o.total <= 0) return; try { ready = { sig: sig(o), blob: await buildOrderXlsx(o, co) }; } catch (e) { ready = null; } }, 400); };
+  const paint = () => {
+    const total = orderTotal(qty, co), min = co.minimum || 0;
+    $("#oTotal").textContent = money(total);
+    const mm = $("#oMin"), send = $("#oSend"), n = Object.values(qty).reduce((a, b) => a + b, 0);
+    document.querySelectorAll("#sheetContent .prod").forEach(el => { const k = qty[el.dataset.p] || 0; el.classList.toggle("has", k > 0); const inp = el.querySelector("input"); if (document.activeElement !== inp) inp.value = k; });
+    if (catalog) $("#cMine").textContent = `In this order (${Object.keys(qty).length})`;
+    if (total <= 0) { mm.className = "min-msg"; mm.textContent = "Add a product to send."; send.textContent = "Send order"; send.className = "btn primary"; send.disabled = true; $("#oXlsx").disabled = true; }
+    else if (min > 0 && total < min) { mm.className = "min-msg under"; mm.textContent = `${money(cents(min - total))} missing to reach ${money(min)}`; send.textContent = "Send anyway"; send.className = "btn warn"; send.disabled = false; $("#oXlsx").disabled = false; }
+    else { mm.className = "min-msg ok"; mm.textContent = min > 0 ? `Minimum of ${money(min)} reached` : `${n} unit${n === 1 ? "" : "s"}, ${Object.keys(qty).length} product${Object.keys(qty).length === 1 ? "" : "s"}`; send.textContent = "Send order"; send.className = "btn primary"; send.disabled = false; $("#oXlsx").disabled = false; }
+  };
+  const setQty = (pid, val) => { val = Math.max(0, Math.min(999, Math.floor(Number(val) || 0))); if (val) qty[pid] = val; else delete qty[pid]; S.drafts[dkey] = qty; LS.set("drafts", S.drafts); paint(); prebuild(); };
+  $("#sheetContent").onclick = async e => {
+    const b = e.target.closest("[data-d]");
+    if (b) { const pid = b.closest(".prod").dataset.p; return setQty(pid, (qty[pid] || 0) + +b.dataset.d); }
+    if (e.target.id === "cMine") { view = view === "order" ? "browse" : "order"; return renderCat(); }
+    if (e.target.id === "cLast") {
+      const prev = (await storeOrders(id).catch(() => [])).find(o => (o.companyId || "reboot") === co.id);
+      if (!prev) return toast(`No earlier ${co.name} order for this store.`);
+      let added = 0; for (const [k, n] of Object.entries(prev.qty)) if (co.byId.has(k)) { qty[k] = n; added++; }
+      S.drafts[dkey] = qty; LS.set("drafts", S.drafts); view = "order"; renderCat(); paint(); prebuild();
+      toast(`${added} product${added === 1 ? "" : "s"} from the ${niceDate(prev.date)} order. Adjust the quantities.`);
+    }
+  };
   $("#sheetContent").oninput = e => {
+    if (e.target.id === "cSearch") { q = e.target.value; view = "browse"; return renderCat(); }
     const pr = e.target.closest(".prod"); if (pr) return setQty(pr.dataset.p, e.target.value);
     if (e.target.closest(".fold")) prebuild();
   };
+  $("#sheetContent").onchange = e => { if (e.target.id === "cBrand") { brand = e.target.value; view = "browse"; renderCat(); } };
   $("#sheetContent").addEventListener("focusout", e => { if (e.target.closest(".prod")) paint(); });
   $("#sheetFoot").onclick = async e => {
     if (e.target.id !== "oSend" && e.target.id !== "oXlsx") return;
@@ -795,25 +894,26 @@ async function openOrder(id) {
     const btn = e.target; btn.disabled = true;
     try {
       // The file is normally ready before the tap, so the share sheet opens inside the tap itself (Safari requires that).
-      const blob = ready && ready.sig === sig(o) ? ready.blob : await buildOrderXlsx(o);
+      const blob = ready && ready.sig === sig(o) ? ready.blob : await buildOrderXlsx(o, co);
       ready = { sig: sig(o), blob };
       const how = await deliver(blob, o.fileName);
       if (how === "again") { toast("The file is ready. Tap the button once more."); return; }
       if (how === "cancelled" || how === "blocked") return;
-       if (btn.id === "oXlsx") { toast("Preview only. Nothing was saved or sent to GoHighLevel. Tap Send order when it is right."); return; }
-      const rec = { storeId: id, storeName: s.name, rep: S.rep, repName: o.rep, date: o.date, ts: Date.now(), qty: o.qty, total: o.total, storeNo: o.storeNo, po: o.po, contact: o.contact, address: o.address };
+      if (btn.id === "oXlsx") { toast(`Preview only. Nothing was saved or sent to ${CRM}. Tap Send order when it is right.`); return; }
+      const rec = { storeId: id, companyId: co.id, storeName: s.name, rep: S.rep, repName: o.rep, date: o.date, ts: Date.now(), qty: o.qty, total: o.total, storeNo: o.storeNo, po: o.po,
+        contact: o.contact, address: o.address, phone: o.phone, email: o.email,
+        lines: Object.entries(o.qty).map(([k, n]) => { const p = co.byId.get(k); return { id: k, code: p.code || "", name: p.name, size: p.size || "", qty: n, price: p.price }; }) };
       rec.fileName = o.fileName; rec.sync = "pending";
       if (savedId != null) rec.id = savedId;
       savedId = await put("orders", rec); sent = true; syncSoon();
-      S.meta[id] = Object.assign({}, S.meta[id], { storeNo: o.storeNo, contact: o.contact, address: o.address }); LS.set("storeMeta", S.meta);
-      if (o.rep && o.rep !== S.rep) { /* rep name on the sheet only; the profile stays the same */ }
+      S.meta[id] = Object.assign({}, S.meta[id], co.id === "reboot" ? { storeNo: o.storeNo, contact: o.contact, address: o.address } : { contact: o.contact }); LS.set("storeMeta", S.meta);
       await refreshDone();
-      toast(how === "shared" ? `Order saved on the store. In Mail, send it to ${C.orderEmail}.` : `Excel downloaded and order saved. Email it to ${C.orderEmail}.`);
+      toast(how === "shared" ? `Order saved on the store. In Mail, send it to ${co.orderEmail}.` : `Excel downloaded and order saved. Email it to ${co.orderEmail}.`);
     } catch (x) {
       toast("The Excel order could not be created. Close the order, reopen it and try again.", true);
     } finally { btn.disabled = false; paint(); }
   };
-  paint(); prebuild();
+  renderCat(); paint(); prebuild();
 }
 
 /* ---------- reports ---------- */
@@ -827,7 +927,9 @@ async function sheetBlob(name, cols, rows, extra) {
 }
 async function monthData(ym) {
   const rows = mine(await all("orders")).filter(o => o.date.slice(0, 7) === ym).sort((a, b) => a.ts - b.ts);
-  return { rows, count: rows.length, stores: new Set(rows.map(o => o.storeId)).size, total: cents(rows.reduce((t, o) => t + o.total, 0)), under: rows.filter(o => o.total < C.minimumOrder).length };
+  const under = o => { const co = company(o.companyId || "reboot"); return co.minimum > 0 && o.total < co.minimum; };
+  const byCo = COMPANIES.map(co => { const r = rows.filter(o => (o.companyId || "reboot") === co.id); return { name: co.name, count: r.length, total: cents(r.reduce((t, o) => t + o.total, 0)) }; }).filter(x => x.count);
+  return { rows, under, byCo, count: rows.length, stores: new Set(rows.map(o => o.storeId)).size, total: cents(rows.reduce((t, o) => t + o.total, 0)), underCount: rows.filter(under).length };
 }
 async function weekData(day) {
   const mon = mondayOf(day), days = [...Array(7).keys()].map(i => addDays(mon, i));
@@ -841,7 +943,7 @@ async function renderReports() {
   try {
     const m = await monthData($("#monthPick").value);
     $("#monthStats").innerHTML = `<div class="stat"><b>${m.count}</b><span>orders</span></div><div class="stat"><b>${m.stores}</b><span>stores</span></div>
-      <div class="stat"><b>${money(m.total)}</b><span>total</span></div><div class="stat"><b>${m.under}</b><span>under ${money(C.minimumOrder)}</span></div>`;
+      <div class="stat"><b>${money(m.total)}</b><span>total</span></div><div class="stat"><b>${m.underCount}</b><span>under the minimum</span></div>` + (m.byCo.length > 1 ? `<div class="stat" style="grid-column:1/-1"><span>${m.byCo.map(x => `${esc(x.name)}: ${x.count} order${x.count === 1 ? "" : "s"}, ${money(x.total)}`).join(" · ")}</span></div>` : "");
     $("#monthXlsx").disabled = !m.count;
     const w = await weekData($("#weekPick").value);
     $("#weekTable").innerHTML = w.rows.length ? `<table class="tbl"><thead><tr><th>Day</th><th class="num">km</th><th>Stores</th></tr></thead><tbody>
@@ -857,15 +959,20 @@ $("#monthXlsx").addEventListener("click", async () => {
   try {
     const ym = $("#monthPick").value, m = await monthData(ym);
     if (!m.count) return toast("No order saved in that month.");
-    const cols = [{ h: "Date", k: "date", w: 12 }, { h: "Store", k: "store", w: 38 }, { h: "Store #", k: "no", w: 10 }, { h: "PO", k: "po", w: 14 }, { h: "Contact", k: "contact", w: 22 },
-      ...C.products.map(p => ({ h: p.name, k: p.id, w: 14 })), { h: "Total", k: "total", w: 12, fmt: '#,##0.00 "$"' }, { h: "Under $" + C.minimumOrder, k: "under", w: 12 }];
-    const rows = m.rows.map(o => Object.assign({ date: o.date, store: o.storeName, no: /^\d+$/.test(o.storeNo) ? Number(o.storeNo) : o.storeNo, po: o.po, contact: o.contact, total: o.total, under: o.total < C.minimumOrder ? "Yes" : "No" },
-      Object.fromEntries(C.products.map(p => [p.id, o.qty[p.id] || null]))));
-    const price = g => [...new Set(C.products.filter(p => p.group === g).map(p => p.price.toFixed(2) + " $"))].join(" / ");
-    const blob = await sheetBlob("Orders " + ym, cols, rows, [
-      { values: { store: `${m.count} orders, ${m.stores} stores`, total: m.total, under: m.under + " under" }, bold: true }, { values: {} },
-      { values: { store: `Tout-en-un: ${price("Tout-en-un")} per unit. Bars: ${price("Bars")} per case. Rep: ${S.rep}.` } }]);
-    const how = await deliver(blob, `Monthly orders ${ym}.xlsx`); if (how === "again") toast("The file is ready. Tap the button once more.");
+    for (const co of COMPANIES) if (m.rows.some(o => (o.companyId || "reboot") === co.id)) await loadCatalog(co).catch(() => {});
+    const wb = new ExcelJS.Workbook(), money2 = '#,##0.00 "$"';
+    const sheet = (name, cols) => { const ws = wb.addWorksheet(name); ws.columns = cols.map(c => ({ header: c[0], key: c[1], width: c[2], style: c[3] ? { numFmt: c[3] } : {} })); ws.getRow(1).font = { bold: true }; ws.views = [{ state: "frozen", ySplit: 1 }]; return ws; };
+    const orders = sheet("Orders", [["Date", "date", 12], ["Company", "co", 12], ["Store", "store", 36], ["Store #", "no", 10], ["PO", "po", 14], ["Contact", "contact", 22], ["Lines", "lines", 8], ["Total", "total", 12, money2], ["Under minimum", "under", 14]]);
+    const lines = sheet("Lines", [["Date", "date", 12], ["Company", "co", 12], ["Store", "store", 36], ["Code", "code", 16], ["Product", "name", 44], ["Qty", "qty", 8], ["Price", "price", 11, money2], ["Line total", "lt", 12, money2]]);
+    for (const o of m.rows) {
+      const co = company(o.companyId || "reboot");
+      const ls = o.lines || Object.entries(o.qty).map(([k, n]) => { const p = co.byId.get(k); return p ? { code: p.code || "", name: p.name + (p.size ? " " + p.size : ""), qty: n, price: p.price } : null; }).filter(Boolean);
+      orders.addRow({ date: o.date, co: co.name, store: o.storeName, no: /^\d+$/.test(o.storeNo || "") ? Number(o.storeNo) : o.storeNo, po: o.po, contact: o.contact, lines: ls.length, total: o.total, under: m.under(o) ? "Yes" : "No" });
+      for (const l of ls) lines.addRow({ date: o.date, co: co.name, store: o.storeName, code: l.code || "", name: l.name + (l.size && !String(l.name).includes(l.size) ? " " + l.size : ""), qty: l.qty, price: l.price, lt: cents(l.qty * l.price) });
+    }
+    orders.addRow({}); const tr = orders.addRow({ store: `${m.count} orders, ${m.stores} stores. Rep: ${S.rep}`, total: m.total, under: m.underCount + " under" }); tr.font = { bold: true };
+    for (const x of m.byCo) orders.addRow({ co: x.name, store: `${x.count} order${x.count === 1 ? "" : "s"}`, total: x.total });
+    const how = await deliver(new Blob([await wb.xlsx.writeBuffer()], { type: XLSX_TYPE }), `Monthly orders ${ym}.xlsx`); if (how === "again") toast("The file is ready. Tap the button once more.");
   } catch (e) { toast("The monthly Excel could not be created. Try again.", true); }
 });
 $("#weekXlsx").addEventListener("click", async () => {
@@ -924,7 +1031,7 @@ $("#addStoreBtn").addEventListener("click", () => {
 });
 
 /* ---------- GoHighLevel settings ---------- */
-function paintApi() { $("#apiUrl").value = API.url(); $("#apiKey").value = API.key(); paintSync(); }
+function paintApi() { $("#crmTitle").textContent = CRM; $("#apiUrl").value = API.url(); $("#apiKey").value = API.key(); paintSync(); }
 $("#ghlConnect").addEventListener("click", async e => {
   const url = $("#apiUrl").value.trim().replace(/\/+$/, ""), key = $("#apiKey").value.trim();
   if (!/^https:\/\//.test(url)) return toast("The service address must start with https://", true);
@@ -935,7 +1042,7 @@ $("#ghlConnect").addEventListener("click", async e => {
     const r = await api("GET", "/api/check");
     const probs = Object.entries(r).filter(([k, v]) => !/^(ok|set)/.test(String(v)));
     if (probs.length) toast(probs.map(([k, v]) => `${k}: ${v}`).join(" · "), true);
-    else { toast("Connected to GoHighLevel."); syncSoon(); }
+    else { toast(`Connected to ${CRM}.`); syncSoon(); }
   } catch (x) { toast(x.message, true); }
   finally { b.disabled = false; b.textContent = "Connect and test"; paintSync(); }
 });

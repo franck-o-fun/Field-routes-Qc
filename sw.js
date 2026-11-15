@@ -1,10 +1,10 @@
 // Keeps the app shell available with a weak signal. Bump VERSION after each upload.
-const VERSION = "field-routes-4";
+const VERSION = "field-routes-6";
 const SHELL = [
   "./", "index.html", "styles.css", "app.js", "config.js",
   "stores.js", "template.js",
   "leaflet.js", "leaflet.css", "exceljs.min.js", "jszip.min.js",
-  "icon-180.png", "icon-192.png", "manifest.webmanifest"
+  "icon-180.png", "icon-192.png", "manifest.webmanifest", "ecotrend-form.xlsx"
 ];
 self.addEventListener("install", e => {
   e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));

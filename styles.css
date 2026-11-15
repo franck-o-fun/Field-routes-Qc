@@ -169,3 +169,6 @@ details.fold .in{padding:0 14px 14px;display:flex;flex-direction:column;gap:10px
 }
 
 #routeActions{display:flex;flex-direction:column;gap:10px}
+.big-pick{width:100%;min-height:64px;font-size:18px;margin-top:4px}
+.cat-tools{display:flex;flex-direction:column;gap:10px;position:sticky;top:-14px;z-index:5;background:var(--bg);padding:8px 0}
+#cList{display:flex;flex-direction:column;gap:10px}
