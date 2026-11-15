@@ -1,6 +1,6 @@
 {
-  "name": "Field routes",
-  "short_name": "Routes",
+  "name": "La Run",
+  "short_name": "La Run",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

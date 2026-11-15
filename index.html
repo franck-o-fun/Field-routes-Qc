@@ -3,21 +3,21 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Field routes</title>
+<title>La Run</title>
 <meta name="theme-color" content="#1f5c3f">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="Routes">
+<meta name="apple-mobile-web-app-title" content="La Run">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icon-180.png">
 <link rel="icon" href="icon-192.png">
 <link rel="stylesheet" href="leaflet.css">
-<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="styles.css?v=7">
 </head>
 <body>
 <header class="topbar">
-  <h1>Field routes</h1>
+  <h1>La Run</h1>
   <button id="repBtn" class="chip" type="button" aria-label="Change rep"></button>
 </header>
 
@@ -122,6 +122,7 @@
           <input id="restoreFile" type="file" accept="application/json,.json" hidden>
         </div>
         <button id="replaceBtn" class="link" type="button">Place all addresses again</button>
+        <p class="hint" id="appVersion"></p>
       </div>
     </div>
   </section>
@@ -151,9 +152,9 @@
 <script src="leaflet.js"></script>
 <script src="jszip.min.js"></script>
 <script src="exceljs.min.js"></script>
-<script src="config.js"></script>
-<script src="stores.js"></script>
-<script src="template.js"></script>
-<script src="app.js"></script>
+<script src="config.js?v=7"></script>
+<script src="stores.js?v=7"></script>
+<script src="template.js?v=7"></script>
+<script src="app.js?v=7"></script>
 </body>
 </html>

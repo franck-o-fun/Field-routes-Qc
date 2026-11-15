@@ -990,7 +990,7 @@ $("#backupBtn").addEventListener("click", async () => {
   try {
     const ls = {}; for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k.startsWith("fr.")) ls[k] = localStorage.getItem(k); }
     const data = { app: "field-routes", made: new Date().toISOString(), ls, notes: await all("notes"), orders: await all("orders"), mileage: await all("mileage") };
-    const how = await deliver(new Blob([JSON.stringify(data)], { type: "application/json" }), `Field routes backup ${today()}.json`);
+    const how = await deliver(new Blob([JSON.stringify(data)], { type: "application/json" }), `La Run backup ${today()}.json`);
     if (how === "again") toast("The file is ready. Tap the button once more.");
   } catch (e) { toast("The backup could not be created.", true); }
 });
@@ -1001,7 +1001,7 @@ $("#restoreFile").addEventListener("change", async e => {
     for (const st of ["notes", "orders", "mileage"]) { await tx(st, "readwrite", s => s.clear()); for (const r of d[st] || []) await put(st, r); }
     Object.entries(d.ls || {}).forEach(([k, v]) => localStorage.setItem(k, v));
     toast("Backup restored. Reloading…"); setTimeout(() => location.reload(), 900);
-  } catch (x) { toast("That file is not a Field routes backup.", true); }
+  } catch (x) { toast("That file is not a La Run backup.", true); }
 });
 $("#replaceBtn").addEventListener("click", () => { geoStop = true; setTimeout(() => { S.geo = {}; LS.set("geo", S.geo); geoRunning = false; refreshMarkers(); renderStores(); geocodeAll(); toast("Placing every address again. Keep the app open."); }, 1300); });
 function paintRep() { $("#repBtn").textContent = S.rep || "Set rep name"; }
@@ -1031,7 +1031,7 @@ $("#addStoreBtn").addEventListener("click", () => {
 });
 
 /* ---------- GoHighLevel settings ---------- */
-function paintApi() { $("#crmTitle").textContent = CRM; $("#apiUrl").value = API.url(); $("#apiKey").value = API.key(); paintSync(); }
+function paintApi() { $("#appVersion").textContent = "La Run version 7"; $("#crmTitle").textContent = CRM; $("#apiUrl").value = API.url(); $("#apiKey").value = API.key(); paintSync(); }
 $("#ghlConnect").addEventListener("click", async e => {
   const url = $("#apiUrl").value.trim().replace(/\/+$/, ""), key = $("#apiKey").value.trim();
   if (!/^https:\/\//.test(url)) return toast("The service address must start with https://", true);
