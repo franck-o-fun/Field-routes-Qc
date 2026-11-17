@@ -22,15 +22,16 @@ window.FR_CONFIG = {
       productFields: true,                // one "Qté ..." field per product on the GoHighLevel opportunity
       orderForm: { storeName: "D4", storeNumber: "E5", po: "D5", address: "G5", rep: "H5", contact: "D6", qtyColumn: "K", extraRow: 17 },
       // price: dollars per unit (Tout-en-un) or per case (bars). row: line on the order form.
+      // upc / upcCase: barcodes from the ReBoot form (UPC EA and UPC CS columns), used by Scan.
       products: [
-        { id: "acai",      group: "Tout-en-un", by: "unit", name: "Açaï",                    size: "292 g", price: 37.04, row: 9 },
-        { id: "framboise", group: "Tout-en-un", by: "unit", name: "Framboise",               size: "292 g", price: 37.04, row: 10 },
-        { id: "ananas",    group: "Tout-en-un", by: "unit", name: "Ananas mangue",           size: "292 g", price: 37.04, row: 11 },
-        { id: "vanille",   group: "Tout-en-un", by: "unit", name: "Protéine vanille",        size: "775 g", price: 45.59, row: 12 },
-        { id: "chocolat",  group: "Tout-en-un", by: "unit", name: "Protéine chocolat",       size: "825 g", price: 45.59, row: 13 },
-        { id: "b-choco",   group: "Bars",       by: "case", name: "Barre chocolat",          size: "60 g",  price: 33.24, row: 14 },
-        { id: "b-arach",   group: "Bars",       by: "case", name: "Barre beurre d'arachide", size: "60 g",  price: 33.24, row: 15 },
-        { id: "b-baies",   group: "Bars",       by: "case", name: "Barre baies d'été",       size: "60 g",  price: 33.24, row: 16 },
+        { id: "acai",      group: "Tout-en-un", by: "unit", name: "Açaï",                    size: "292 g", price: 37.04, row: 9, upc: "628634929117", upcCase: "62863492929118" },
+        { id: "framboise", group: "Tout-en-un", by: "unit", name: "Framboise",               size: "292 g", price: 37.04, row: 10, upc: "628634929162", upcCase: "6286349292014" },
+        { id: "ananas",    group: "Tout-en-un", by: "unit", name: "Ananas mangue",           size: "292 g", price: 37.04, row: 11, upc: "628634929155", upcCase: "62863492929156" },
+        { id: "vanille",   group: "Tout-en-un", by: "unit", name: "Protéine vanille",        size: "775 g", price: 45.59, row: 12, upc: "628634929209", upcCase: "62863492939209" },
+        { id: "chocolat",  group: "Tout-en-un", by: "unit", name: "Protéine chocolat",       size: "825 g", price: 45.59, row: 13, upc: "628634929254", upcCase: "62863492939254" },
+        { id: "b-choco",   group: "Bars",       by: "case", name: "Barre chocolat",          size: "60 g",  price: 33.24, row: 14, upc: "6286349290102", upcCase: "6286349291000" },
+        { id: "b-arach",   group: "Bars",       by: "case", name: "Barre beurre d'arachide", size: "60 g",  price: 33.24, row: 15, upc: "6286349290119", upcCase: "6286349290010" },
+        { id: "b-baies",   group: "Bars",       by: "case", name: "Barre baies d'été",       size: "60 g",  price: 33.24, row: 16, upc: "6286349290126", upcCase: "6286349290027" },
         // Not printed on the form yet: the row is added only when ordered, product codes left blank.
         { id: "b-caramel", group: "Bars",       by: "case", name: "Barre caramel salé",      size: "60 g",  price: 33.24, row: null,
           formLine: { description: "BARRE ÉNERGÉTIQUE À BASE D'ALIMENTS COMPLETS CARAMEL SALÉ", caseQty: 12, format: "60GR" } }
