@@ -8,7 +8,7 @@ const XLSX_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.s
 const $ = s => document.querySelector(s);
 const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const sleep = ms => new Promise(r => setTimeout(r, ms));
-const money = n => new Intl.NumberFormat("en-CA", { style: "currency", currency: "CAD" }).format(n);
+const money = n => new Intl.NumberFormat(LOC, { style: "currency", currency: "CAD" }).format(n);
 const cents = n => Math.round(n * 100) / 100;
 
 const LS = {
@@ -16,19 +16,41 @@ const LS = {
   set(k, v) { try { localStorage.setItem("fr." + k, JSON.stringify(v)); } catch (e) { /* storage full or blocked */ } }
 };
 
+/* ---------- language: French by default, English from Reports ---------- */
+const LANG = LS.get("lang", "fr") === "en" ? "en" : "fr";
+const LOC = LANG === "fr" ? "fr-CA" : "en-CA";
+const FRS = window.LA_RUN_FR || {};
+const missingFr = new Set();     // English text with no French yet (shown in English meanwhile)
+function tr(key, vals) {
+  let out = key;
+  if (LANG === "fr") { if (FRS[key] != null) out = FRS[key]; else missingFr.add(key); }
+  return vals.length ? out.replace(/\{(\d+)\}/g, (_, i) => vals[i] != null ? vals[i] : "") : out;
+}
+const tt = (str, ...v) => tr(str, v);                                                  // tt("Save")
+const T = (strs, ...v) => tr(strs.reduce((a, x, i) => a + "{" + (i - 1) + "}" + x), v);   // T`${n} stores`: key "{0} stores"
+const pl = n => (LANG === "fr" ? Math.abs(n) < 2 : n === 1) ? "" : "s";               // plural "s", French rule for 0 and 1
+// The page's fixed text (index.html) is written in English and translated once at start.
+function translatePage() {
+  document.documentElement.lang = LANG;
+  if (LANG !== "fr") return;
+  const walk = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  for (let n = walk.nextNode(); n; n = walk.nextNode()) { const k = n.textContent.trim(); if (k && FRS[k] != null) n.textContent = n.textContent.replace(k, FRS[k]); }
+  for (const el of document.querySelectorAll("[placeholder],[aria-label]")) for (const a of ["placeholder", "aria-label"]) { const k = el.getAttribute(a); if (k && FRS[k] != null) el.setAttribute(a, FRS[k]); }
+}
+
 /* ---------- dates, always in the territory's time zone ---------- */
 const dayFmt = new Intl.DateTimeFormat("en-CA", { timeZone: C.timeZone, year: "numeric", month: "2-digit", day: "2-digit" });
 const today = () => dayFmt.format(new Date());
 const fromYmd = s => { const [y, m, d] = s.split("-").map(Number); return new Date(Date.UTC(y, m - 1, d, 12)); };
 const toYmd = d => d.toISOString().slice(0, 10);
 const addDays = (s, n) => { const d = fromYmd(s); d.setUTCDate(d.getUTCDate() + n); return toYmd(d); };
-const weekday = s => new Intl.DateTimeFormat("en-CA", { weekday: "long", timeZone: "UTC" }).format(fromYmd(s));
-const niceDate = s => new Intl.DateTimeFormat("en-CA", { weekday: "short", month: "short", day: "numeric", year: "numeric", timeZone: "UTC" }).format(fromYmd(s));
+const weekday = s => new Intl.DateTimeFormat(LOC, { weekday: "long", timeZone: "UTC" }).format(fromYmd(s));
+const niceDate = s => new Intl.DateTimeFormat(LOC, { weekday: "short", month: "short", day: "numeric", year: "numeric", timeZone: "UTC" }).format(fromYmd(s));
 const mondayOf = s => addDays(s, -((fromYmd(s).getUTCDay() + 6) % 7));
-const shortDate = s => new Intl.DateTimeFormat("en-CA", { month: "short", day: "numeric", timeZone: "UTC" }).format(fromYmd(s));
+const shortDate = s => new Intl.DateTimeFormat(LOC, { month: "short", day: "numeric", timeZone: "UTC" }).format(fromYmd(s));
 const daysBetween = (a, b) => Math.round((fromYmd(b) - fromYmd(a)) / 864e5);
 const maxDate = arr => arr.filter(Boolean).sort().pop() || "";
-const ago = s => { const n = daysBetween(s, today()); return n <= 0 ? "today" : n === 1 ? "yesterday" : `${n} days ago`; };
+const ago = s => { const n = daysBetween(s, today()); return n <= 0 ? tt("today") : n === 1 ? tt("yesterday") : T`${n} days ago`; };
 const normTxt = x => String(x || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/\s+/g, " ").trim();
 
 /* ---------- IndexedDB ---------- */
@@ -140,25 +162,25 @@ function renderFilters() {
   $("#listSel").value = S.listId;
   const regs = [...new Set(curList().stores.map(regionOf).filter(Boolean))].sort((a, b) => a.localeCompare(b, "fr"));
   if (!regs.includes(S.region)) S.region = "";
-  $("#regionSel").innerHTML = `<option value="">All regions</option>` + regs.map(r => `<option>${esc(r)}</option>`).join("");
+  $("#regionSel").innerHTML = `<option value="">${tt("All regions")}</option>` + regs.map(r => `<option>${esc(r)}</option>`).join("");
   $("#regionSel").value = S.region;
   $("#hideDone").checked = S.hideDone;
 }
 function paintDueSeg() {
   let red = 0, amber = 0;
   for (const s of shownStores(true)) { const c = statusFor(s.id).cls; if (c === "red") red++; else if (c === "amber") amber++; }
-  const lab = { all: "All", due: `Due · ${red + amber}`, reorder: `Reorder · ${red}` };
+  const lab = { all: tt("All"), due: T`Due · ${red + amber}`, reorder: T`Reorder · ${red}` };
   document.querySelectorAll(".dueSeg").forEach(g => g.querySelectorAll("button[data-due]").forEach(b => {
     b.textContent = lab[b.dataset.due]; b.classList.toggle("on", b.dataset.due === S.dueFilter); b.setAttribute("aria-pressed", b.dataset.due === S.dueFilter);
   }));
-  const pb = $("#planDue"); if (pb) pb.textContent = `Plan a run from due stores (${red + amber})`;
+  const pb = $("#planDue"); if (pb) pb.textContent = T`Plan a run from due stores (${red + amber})`;
 }
 function setDueFilter(v) { S.dueFilter = v; LS.set("dueFilter", v); renderStores(); refreshMarkers(true); }
 document.addEventListener("click", e => { const b = e.target.closest(".dueSeg button[data-due]"); if (b) setDueFilter(b.dataset.due); });
 function renderCount() {
   paintDueSeg();
   const n = shownStores().length;
-  $("#count").textContent = `${n} store${n === 1 ? "" : "s"} shown · ${S.route.length} on today's route` + (G.pending ? ` · ${G.pending} to sync` : "");
+  $("#count").textContent = T`${n} store${pl(n)} shown · ${S.route.length} on today's route` + (G.pending ? T` · ${G.pending} to sync` : "");
 }
 function renderStores() {
   const shown = shownStores();
@@ -166,17 +188,17 @@ function renderStores() {
   $("#storeList").innerHTML = shown.length ? shown.map(s => {
     const inR = S.route.includes(s.id), g = S.geo[s.id];
     const st = S.done.has(s.id) ? null : statusFor(s.id);
-    const due = st && st.cls === "red" ? ` <span class="tag due-red">Reorder due</span>` : st && st.cls === "amber" ? ` <span class="tag due-amber">Visit due</span>` : "";
-    const tags = (S.done.has(s.id) ? `<span class="tag done">Done today</span>` : "") +
-      (!s.address ? `<span class="tag nomap">No address</span>` : g && g.approx ? `<span class="tag">Approx. pin</span>` : "");
+    const due = st && st.cls === "red" ? ` <span class="tag due-red">${tt("Reorder due")}</span>` : st && st.cls === "amber" ? ` <span class="tag due-amber">${tt("Visit due")}</span>` : "";
+    const tags = (S.done.has(s.id) ? `<span class="tag done">${tt("Done today")}</span>` : "") +
+      (!s.address ? `<span class="tag nomap">${tt("No address")}</span>` : g && g.approx ? `<span class="tag">${tt("Approx. pin")}</span>` : "");
     return `<li class="${inR ? "in" : ""}">
       <button class="pick" type="button" data-id="${esc(s.id)}" aria-pressed="${inR}">
         <span class="tick">${inR ? "✓" : ""}</span>
         <span style="min-width:0"><span class="s-name">${esc(s.name)}${s.storeNo ? ` <span class="tag">#${esc(s.storeNo)}</span>` : ""}${due}</span>
-        <span class="s-sub">${esc([s.address, s.city].filter(Boolean).join(", ") || "No address")}${tags}</span></span>
+        <span class="s-sub">${esc([s.address, s.city].filter(Boolean).join(", ") || tt("No address"))}${tags}</span></span>
       </button>
-      <button class="open" type="button" data-open="${esc(s.id)}" aria-label="Open ${esc(s.name)}">›</button></li>`;
-  }).join("") : `<li class="empty" style="display:block">No store matches. Clear the search, pick another region or show all stores.</li>`;
+      <button class="open" type="button" data-open="${esc(s.id)}" aria-label="${T`Open ${esc(s.name)}`}">›</button></li>`;
+  }).join("") : `<li class="empty" style="display:block">${tt("No store matches. Clear the search, pick another region or show all stores.")}</li>`;
   const b = $("#routeBadge"); b.hidden = !S.route.length; b.textContent = S.route.length;
 }
 $("#storeList").addEventListener("click", e => {
@@ -190,8 +212,8 @@ $("#hideDone").addEventListener("change", e => { S.hideDone = e.target.checked; 
 $("#planDue").addEventListener("click", planDueRun);
 $("#addShown").addEventListener("click", () => {
   const add = shownStores().filter(s => !S.route.includes(s.id));
-  if (!add.length) return toast("Every store on screen is already on the route.");
-  add.forEach(s => S.route.push(s.id)); routeChanged(); toast(`${add.length} store${add.length === 1 ? "" : "s"} added to today's route.`);
+  if (!add.length) return toast(tt("Every store on screen is already on the route."));
+  add.forEach(s => S.route.push(s.id)); routeChanged(); toast(T`${add.length} store${pl(add.length)} added to today's route.`);
 });
 
 /* ---------- route basics ---------- */
@@ -209,7 +231,7 @@ function toggleRoute(id) {
 /* ---------- map ---------- */
 let map = null; const markers = new Map(); let meMarker = null;
 function initMap() {
-  if (!window.L) { $("#map").innerHTML = `<p class="empty">The map could not load. Check your connection and reopen the app.</p>`; return; }
+  if (!window.L) { $("#map").innerHTML = `<p class="empty">${tt("The map could not load. Check your connection and reopen the app.")}</p>`; return; }
   map = L.map("map", { zoomControl: true }).setView([46.2, -72.6], 7);
   L.tileLayer(C.tiles, { maxZoom: 19, attribution: "© OpenStreetMap" }).addTo(map);
   map.on("popupopen", e => { const id = e.popup._frId; if (id) e.popup.setContent(popupHtml(id)); });
@@ -223,12 +245,12 @@ function initMap() {
 function popupHtml(id) {
   const s = byId.get(id), g = S.geo[id], inR = S.route.includes(id);
   return `<div class="pop"><b>${esc(s.name)}</b><span>${esc([s.address, s.city, s.postal].filter(Boolean).join(", "))}</span>
-    ${S.done.has(id) ? `<small class="pst ok">Done today</small>` : (st => st.cls === "new" ? "" : `<small class="pst ${st.cls}">${esc(st.text)}</small>`)(statusFor(id))}
-    ${s.phone ? `<small>${esc(s.phone)}</small>` : ""}${g && g.approx ? `<small>Approximate pin: the address did not match a building.</small>` : ""}
-    <div class="acts"><button class="primary" data-act="order" data-id="${esc(id)}">Order</button>
-    <button data-act="route" data-id="${esc(id)}">${inR ? "Remove from route" : "Add to route"}</button>
-    <button data-act="note" data-id="${esc(id)}">Add a note</button>
-    <button data-act="record" data-id="${esc(id)}">Store record</button></div></div>`;
+    ${S.done.has(id) ? `<small class="pst ok">${tt("Done today")}</small>` : (st => st.cls === "new" ? "" : `<small class="pst ${st.cls}">${esc(st.text)}</small>`)(statusFor(id))}
+    ${s.phone ? `<small>${esc(s.phone)}</small>` : ""}${g && g.approx ? `<small>${tt("Approximate pin: the address did not match a building.")}</small>` : ""}
+    <div class="acts"><button class="primary" data-act="order" data-id="${esc(id)}">${tt("Order")}</button>
+    <button data-act="route" data-id="${esc(id)}">${inR ? tt("Remove from route") : tt("Add to route")}</button>
+    <button data-act="note" data-id="${esc(id)}">${tt("Add a note")}</button>
+    <button data-act="record" data-id="${esc(id)}">${tt("Store record")}</button></div></div>`;
 }
 function refreshMarkers(fit) {
   if (!map) return;
@@ -249,7 +271,7 @@ function refreshMarkers(fit) {
     pts.push([g.lat, g.lng]);
   }
   if (S.start) {
-    if (!meMarker) meMarker = L.marker([S.start.lat, S.start.lng], { icon: L.divIcon({ className: "", iconSize: [22, 22], html: `<div class="pin me"></div>` }), zIndexOffset: 900 }).addTo(map).bindPopup("Start of the day");
+    if (!meMarker) meMarker = L.marker([S.start.lat, S.start.lng], { icon: L.divIcon({ className: "", iconSize: [22, 22], html: `<div class="pin me"></div>` }), zIndexOffset: 900 }).addTo(map).bindPopup(tt("Start of the day"));
     else meMarker.setLatLng([S.start.lat, S.start.lng]);
   } else if (meMarker) { meMarker.remove(); meMarker = null; }
   if (fit && pts.length) map.fitBounds(pts, { padding: [30, 30], maxZoom: 13 });
@@ -294,9 +316,9 @@ async function geocodeAll() {
   const st = $("#geoStatus"); let n = 0, errors = 0; const total = todo.length;
   while (todo.length && !geoStop) {
     const s = todo[0];
-    st.hidden = false; st.textContent = `Placing addresses on the map: ${n + 1} of ${total}. This only happens once.`;
+    st.hidden = false; st.textContent = T`Placing addresses on the map: ${n + 1} of ${total}. This only happens once.`;
     try { S.geo[s.id] = await geocodeOne(s); errors = 0; }
-    catch (e) { errors++; if (errors >= 3) { st.textContent = "Could not place addresses right now. They will be tried again when you reopen the app."; await sleep(4000); break; } await sleep(3000); continue; }
+    catch (e) { errors++; if (errors >= 3) { st.textContent = tt("Could not place addresses right now. They will be tried again when you reopen the app."); await sleep(4000); break; } await sleep(3000); continue; }
     LS.set("geo", S.geo); n++;
     refreshMarkers(); if (n % 10 === 0) renderStores();
     await sleep(1100);
@@ -372,10 +394,10 @@ async function measure() {
 let busy = false;
 async function optimize() {
   if (busy) return;
-  if (!S.route.length) return toast("Add stores to the route first.");
+  if (!S.route.length) return toast(tt("Add stores to the route first."));
   const ids = placed();
-  if (ids.length + (S.start ? 1 : 0) < 2) return toast(S.start ? "None of these stores has a pin yet, so there is nothing to drive to." : "Tap Start from here, or add a second store, to get a loop.", true);
-  busy = true; const b = $("#optimize"); b.disabled = true; b.textContent = "Optimizing…";
+  if (ids.length + (S.start ? 1 : 0) < 2) return toast(S.start ? tt("None of these stores has a pin yet, so there is nothing to drive to.") : tt("Tap Start from here, or add a second store, to get a loop."), true);
+  busy = true; const b = $("#optimize"); b.disabled = true; b.textContent = tt("Optimizing…");
   try {
     let order = ids.slice();
     if (!S.start) { let w = 0; order.forEach((id, i) => { if (S.geo[id].lng < S.geo[order[w]].lng) w = i; }); order.unshift(order.splice(w, 1)[0]); }   // westernmost first
@@ -391,18 +413,18 @@ async function optimize() {
     LS.set("route", S.route);
     await measure();
     const miss = unplaced().length;
-    toast(miss ? `Route optimized. ${miss} store${miss === 1 ? " has" : "s have"} no pin and stay${miss === 1 ? "s" : ""} at the end.` : "Route optimized by real driving time.");
+    toast(miss ? (miss === 1 ? tt("Route optimized. 1 store has no pin and stays at the end.") : T`Route optimized. ${miss} stores have no pin and stay at the end.`) : tt("Route optimized by real driving time."));
   } catch (e) {
-    toast("Could not get driving times. Check your signal and tap Optimize again.", true);
+    toast(tt("Could not get driving times. Check your signal and tap Optimize again."), true);
   } finally {
-    busy = false; b.disabled = false; b.textContent = "Optimize";
+    busy = false; b.disabled = false; b.textContent = tt("Optimize");
     renderStores(); refreshMarkers(true); renderRoute();
   }
 }
 let measureT;
 function measureSoon() {
   clearTimeout(measureT);
-  measureT = setTimeout(async () => { try { await measure(); } catch (e) { toast("Could not measure this order. Check your signal.", true); } renderRoute(); }, 700);
+  measureT = setTimeout(async () => { try { await measure(); } catch (e) { toast(tt("Could not measure this order. Check your signal."), true); } renderRoute(); }, 700);
 }
 
 /* ---------- route screen ---------- */
@@ -423,34 +445,34 @@ function mapLinks() {
 function renderRoute() {
   const n = S.route.length;
   const first = !S.start && placed().length ? byId.get(placed()[0]) : null;
-  $("#startText").textContent = S.start ? `Your location, set at ${S.start.time || "today"}` : first ? `No location. Starts and ends at ${first.name}` : "No location set";
+  $("#startText").textContent = S.start ? T`Your location, set at ${S.start.time || tt("today")}` : first ? T`No location. Starts and ends at ${first.name}` : tt("No location set");
   $("#removeLoc").hidden = !S.start;
   $("#routeEmpty").hidden = !!n; $("#routeActions").hidden = !n;
   $("#routeList").innerHTML = S.route.map((id, i) => {
     const s = byId.get(id), g = S.geo[id];
     return `<li><span class="n">${i + 1}</span>
       <button class="t" type="button" data-open="${esc(id)}"><span class="s-name">${esc(s.name)}</span>
-      <span class="s-sub">${esc(s.city || "")}${g && g.lat ? (g.approx ? " · approx. pin" : "") : " · no pin, not in the drive"}${S.done.has(id) ? " · done today" : ""}</span></button>
-      <button class="mv" type="button" data-mv="-1" data-i="${i}" ${i ? "" : "disabled"} aria-label="Earlier">↑</button>
-      <button class="mv" type="button" data-mv="1" data-i="${i}" ${i < n - 1 ? "" : "disabled"} aria-label="Later">↓</button>
-      <button class="mv" type="button" data-rm="${esc(id)}" aria-label="Remove">✕</button></li>`;
+      <span class="s-sub">${esc(s.city || "")}${g && g.lat ? (g.approx ? tt(" · approx. pin") : "") : tt(" · no pin, not in the drive")}${S.done.has(id) ? tt(" · done today") : ""}</span></button>
+      <button class="mv" type="button" data-mv="-1" data-i="${i}" ${i ? "" : "disabled"} aria-label="${tt("Earlier")}">↑</button>
+      <button class="mv" type="button" data-mv="1" data-i="${i}" ${i < n - 1 ? "" : "disabled"} aria-label="${tt("Later")}">↓</button>
+      <button class="mv" type="button" data-rm="${esc(id)}" aria-label="${tt("Remove")}">✕</button></li>`;
   }).join("");
   const sum = $("#routeSummary");
   if (n && infoOk()) {
     const h = Math.floor(S.info.min / 60), m = S.info.min % 60;
     sum.hidden = false;
-    sum.innerHTML = `<div class="row between"><div><div class="label">Driving time</div><div class="big">${h ? h + " h " : ""}${m} min</div></div>
-      <div style="text-align:right"><div class="label">Round trip</div><div class="big">${S.info.km.toFixed(1)} km</div></div></div>
-      <p class="hint">Real roads, back to the start. No live traffic.</p>`;
+    sum.innerHTML = `<div class="row between"><div><div class="label">${tt("Driving time")}</div><div class="big">${h ? h + " h " : ""}${m} min</div></div>
+      <div style="text-align:right"><div class="label">${tt("Round trip")}</div><div class="big">${S.info.km.toFixed(1)} km</div></div></div>
+      <p class="hint">${tt("Real roads, back to the start. No live traffic.")}</p>`;
   } else if (n) {
-    sum.hidden = false; sum.innerHTML = `<p class="hint">Tap Optimize to put the stops in driving order and get the time and kilometres.</p>`;
+    sum.hidden = false; sum.innerHTML = `<p class="hint">${tt("Tap Optimize to put the stops in driving order and get the time and kilometres.")}</p>`;
   } else sum.hidden = true;
   const links = mapLinks();
   $("#gmaps").toggleAttribute("disabled", !links); $("#amaps").toggleAttribute("disabled", !links);
   if (links) { $("#gmaps").href = links.google; $("#amaps").href = links.apple; } else { $("#gmaps").removeAttribute("href"); $("#amaps").removeAttribute("href"); }
-  $("#mapsNote").textContent = !links ? "No store on the route has a pin yet." :
-    (links.cut ? `Long day: the map app gets the first ${C.maxMapStops} stores, then the drive back to the start. The app still knows all ${links.total}. ` : "") +
-    "Both map apps open this exact order and end about one block from where you started.";
+  $("#mapsNote").textContent = !links ? tt("No store on the route has a pin yet.") :
+    (links.cut ? T`Long day: the map app gets the first ${C.maxMapStops} stores, then the drive back to the start. The app still knows all ${links.total}. ` : "") +
+    tt("Both map apps open this exact order and end about one block from where you started.");
   $("#saveDay").disabled = !(infoOk() && S.info.km > 0);
 }
 $("#routeList").addEventListener("click", e => {
@@ -462,31 +484,31 @@ $("#routeList").addEventListener("click", e => {
   routeChanged(); measureSoon();
 });
 $("#startHere").addEventListener("click", () => {
-  if (!navigator.geolocation) return toast("This browser cannot share your location.", true);
-  const b = $("#startHere"); b.disabled = true; b.textContent = "Finding you…";
+  if (!navigator.geolocation) return toast(tt("This browser cannot share your location."), true);
+  const b = $("#startHere"); b.disabled = true; b.textContent = tt("Finding you…");
   navigator.geolocation.getCurrentPosition(p => {
-    S.start = { lat: p.coords.latitude, lng: p.coords.longitude, time: new Intl.DateTimeFormat("en-CA", { hour: "numeric", minute: "2-digit", timeZone: C.timeZone }).format(new Date()) };
-    LS.set("start", S.start); b.disabled = false; b.textContent = "Start from here";
-    routeChanged(); toast("Start set to where you are now.");
+    S.start = { lat: p.coords.latitude, lng: p.coords.longitude, time: new Intl.DateTimeFormat(LOC, { hour: "numeric", minute: "2-digit", timeZone: C.timeZone }).format(new Date()) };
+    LS.set("start", S.start); b.disabled = false; b.textContent = tt("Start from here");
+    routeChanged(); toast(tt("Start set to where you are now."));
   }, err => {
-    b.disabled = false; b.textContent = "Start from here";
-    toast(err.code === 1 ? "Location is turned off for this site. Allow it in Settings, then tap again." : "Could not find your location. Step outside or check your signal, then tap again.", true);
+    b.disabled = false; b.textContent = tt("Start from here");
+    toast(err.code === 1 ? tt("Location is turned off for this site. Allow it in Settings, then tap again.") : tt("Could not find your location. Step outside or check your signal, then tap again."), true);
   }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 });
 });
-$("#removeLoc").addEventListener("click", () => { S.start = null; LS.set("start", null); routeChanged(); toast("Starting point removed."); });
+$("#removeLoc").addEventListener("click", () => { S.start = null; LS.set("start", null); routeChanged(); toast(tt("Starting point removed.")); });
 $("#optimize").addEventListener("click", optimize);
 let clearArmed = 0;
 $("#clearRoute").addEventListener("click", e => {
-  if (Date.now() - clearArmed > 4000) { clearArmed = Date.now(); e.target.textContent = "Tap again to clear"; setTimeout(() => { e.target.textContent = "Clear"; }, 4000); return; }
-  clearArmed = 0; e.target.textContent = "Clear"; S.route = []; routeChanged(); toast("Route cleared.");
+  if (Date.now() - clearArmed > 4000) { clearArmed = Date.now(); e.target.textContent = tt("Tap again to clear"); setTimeout(() => { e.target.textContent = tt("Clear"); }, 4000); return; }
+  clearArmed = 0; e.target.textContent = tt("Clear"); S.route = []; routeChanged(); toast(tt("Route cleared."));
 });
 $("#saveDay").addEventListener("click", async () => {
-  if (!infoOk() || !(S.info.km > 0)) return toast("Optimize the route first so the day has a real distance.", true);
+  if (!infoOk() || !(S.info.km > 0)) return toast(tt("Optimize the route first so the day has a real distance."), true);
   const date = today();
   try {
     await put("mileage", { key: S.rep + "|" + date, rep: S.rep, date, km: S.info.km, stores: S.route.map(id => label(byId.get(id))) });
-    toast(`Saved ${niceDate(date)}: ${S.info.km.toFixed(1)} km, ${S.route.length} store${S.route.length === 1 ? "" : "s"}.`);
-  } catch (e) { toast("Could not save the day on this phone. Free some storage and try again.", true); }
+    toast(T`Saved ${niceDate(date)}: ${S.info.km.toFixed(1)} km, ${S.route.length} store${pl(S.route.length)}.`);
+  } catch (e) { toast(tt("Could not save the day on this phone. Free some storage and try again."), true); }
 });
 
 /* ---------- GoHighLevel sync (through the go-between service) ---------- */
@@ -499,14 +521,14 @@ const G = { running: false, pending: 0, error: "", timer: null, last: 0 };
 async function api(method, path, body, ms) {
   const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), ms || 75000);
   try {
-    const r = await fetch(API.url() + path, { method, signal: ctl.signal,
+    const r = await fetch(API.url() + path + (path.includes("?") ? "&" : "?") + "lang=" + LANG, { method, signal: ctl.signal,
       headers: Object.assign({ "X-App-Key": API.key() }, body ? { "Content-Type": "application/json" } : {}), body: body ? JSON.stringify(body) : undefined });
     let j = {}; try { j = await r.json(); } catch (e) { /* empty */ }
-    if (!r.ok) { const e = new Error(j.error || `The service answered ${r.status}.`); e.status = r.status; throw e; }
+    if (!r.ok) { const e = new Error(j.error || T`The service answered ${r.status}.`); e.status = r.status; throw e; }
     return j;
   } catch (e) {
-    if (e.name === "AbortError") { const x = new Error("The service did not answer in time. It may be waking up; try again in a minute."); x.status = 0; throw x; }
-    if (!e.status && e.status !== 0) { const x = new Error("No connection to the service. It will retry when you have signal."); x.status = 0; throw x; }
+    if (e.name === "AbortError") { const x = new Error(tt("The service did not answer in time. It may be waking up; try again in a minute.")); x.status = 0; throw x; }
+    if (!e.status && e.status !== 0) { const x = new Error(tt("No connection to the service. It will retry when you have signal.")); x.status = 0; throw x; }
     throw e;
   } finally { clearTimeout(t); }
 }
@@ -514,7 +536,7 @@ const blobToDataUrl = b => new Promise((res, rej) => { const f = new FileReader(
 async function contactFor(id, create) {
   const m = LS.get("ghlContacts", {}); if (m[id]) return m[id];
   if (!create) return null;
-  const s = byId.get(id); if (!s) throw new Error("This store is no longer in the list.");
+  const s = byId.get(id); if (!s) throw new Error(tt("This store is no longer in the list."));
   const meta = S.meta[id] || {}, list = lists.find(l => l.id === s.listId);
   const r = await api("POST", "/api/contact", { store: { id, name: label(s), address: s.address, city: s.city, postal: s.postal, phone: s.phone, email: s.email,
     region: regionOf(s), storeNo: meta.storeNo || s.storeNo, list: list ? list.name : "" } });
@@ -526,9 +548,9 @@ async function countPending() {
 }
 function paintSync() {
   const el = $("#ghlStatus"); if (el) {
-    el.textContent = !connected() ? "Not connected. Notes and orders stay on this phone." :
-      G.running ? "Syncing…" : G.error ? `${G.pending} waiting to sync. ${G.error}` :
-      G.pending ? `${G.pending} waiting to sync.` : `Connected. Everything is synced to ${CRM}.`;
+    el.textContent = !connected() ? tt("Not connected. Notes and orders stay on this phone.") :
+      G.running ? tt("Syncing…") : G.error ? T`${G.pending} waiting to sync. ${G.error}` :
+      G.pending ? T`${G.pending} waiting to sync.` : T`Connected. Everything is synced to ${CRM}.`;
   }
   renderCount();
 }
@@ -555,7 +577,7 @@ async function syncOrder(r) {
   if (out.warning) toast(out.warning, true);
 }
 async function syncAll(manual) {
-  if (G.running || !connected()) { if (manual && !connected()) toast("Add the service address and app password first.", true); return; }
+  if (G.running || !connected()) { if (manual && !connected()) toast(tt("Add the service address and app password first."), true); return; }
   G.running = true; G.error = ""; paintSync();
   let done = 0;
   try {
@@ -570,10 +592,10 @@ async function syncAll(manual) {
         r.syncError = e.message; await put(st, r);                          // this one item failed: keep going with the others
       }
     }
-  } catch (e) { G.error = "Saved data could not be read."; }
+  } catch (e) { G.error = tt("Saved data could not be read."); }
   G.running = false; G.last = Date.now();
   await countPending();
-  if (manual) toast(G.error ? G.error : done ? `${done} item${done === 1 ? "" : "s"} sent to ${CRM}.` : "Nothing waiting. Everything is synced.", !!G.error);
+  if (manual) toast(G.error ? G.error : done ? T`${done} item${pl(done)} sent to ${CRM}.` : tt("Nothing waiting. Everything is synced."), !!G.error);
   clearTimeout(G.timer);
   if (G.pending && connected()) G.timer = setTimeout(() => syncAll(), G.error ? 120000 : 5000);
 }
@@ -696,30 +718,30 @@ function planDueRun() {
   let cand = shownStores(true).filter(s => !S.route.includes(s.id) && !S.done.has(s.id) && S.geo[s.id] && S.geo[s.id].lat && ["red", "amber"].includes(statusFor(s.id).cls));
   if (S.dueFilter === "reorder") cand = cand.filter(s => statusFor(s.id).cls === "red");
   const regions = new Set(cand.map(regionOf));
-  if (!cand.length) return toast(S.route.length ? "Every due store shown is already on the route." : "No due store with a pin in what is shown. Try another region.");
+  if (!cand.length) return toast(S.route.length ? tt("Every due store shown is already on the route.") : tt("No due store with a pin in what is shown. Try another region."));
   let how;
-  if (S.region || regions.size === 1) { cand.sort((a, b) => urgency(b.id) - urgency(a.id)); how = `most overdue in ${S.region || [...regions][0]}`; }
+  if (S.region || regions.size === 1) { cand.sort((a, b) => urgency(b.id) - urgency(a.id)); how = T`most overdue in ${S.region || [...regions][0]}`; }
   else if (S.start) {
     const R = C.dueRadiusKm || 120;
     cand = cand.filter(s => kmBetween(S.start, S.geo[s.id]) <= R).sort((a, b) => kmBetween(S.start, S.geo[a.id]) - kmBetween(S.start, S.geo[b.id]));
-    if (!cand.length) return toast(`No due store within ${R} km of your start. Pick a region instead.`);
-    how = `closest to your start, within ${R} km`;
+    if (!cand.length) return toast(T`No due store within ${R} km of your start. Pick a region instead.`);
+    how = T`closest to your start, within ${R} km`;
   }
-  else return toast("Pick a region first, or set your start on the Route tab, so the run stays in one area.");
+  else return toast(tt("Pick a region first, or set your start on the Route tab, so the run stays in one area."));
   const room = Math.max(0, size - S.route.length);
-  if (!room) return toast(`Today's route already has ${S.route.length} stores. Remove some first.`);
+  if (!room) return toast(T`Today's route already has ${S.route.length} stores. Remove some first.`);
   const add = cand.slice(0, room);
   add.forEach(s => S.route.push(s.id)); routeChanged();
   setTab("route");
-  toast(`${add.length} due store${add.length === 1 ? "" : "s"} added (${how}). Tap Optimize to order the run.`);
+  toast(T`${add.length} due store${pl(add.length)} added (${how}). Tap Optimize to order the run.`);
 }
 function statusFor(id) {
   const d = datesFor(id), t = today(), touch = maxDate([d.visit, d.order]);
-  if (!touch) return { cls: "new", text: "No history yet" };
+  if (!touch) return { cls: "new", text: tt("No history yet") };
   const so = d.order ? daysBetween(d.order, t) : null, st = daysBetween(touch, t);
-  if (so != null && d.reorderDays > 0 && so >= d.reorderDays) return { cls: "red", text: `Reorder due · ${so} days since the last order` };
-  if (d.followupDays > 0 && st >= d.followupDays) return { cls: "amber", text: `Visit due · ${st} days since the last visit` };
-  return { cls: "ok", text: "Up to date" };
+  if (so != null && d.reorderDays > 0 && so >= d.reorderDays) return { cls: "red", text: T`Reorder due · ${so} days since the last order` };
+  if (d.followupDays > 0 && st >= d.followupDays) return { cls: "amber", text: T`Visit due · ${st} days since the last visit` };
+  return { cls: "ok", text: tt("Up to date") };
 }
 // One history per store: this phone's notes and orders (even unsynced) plus the CRM's (laptop, teammates).
 function storeHistory(id, notes, localOrders) {
@@ -753,24 +775,24 @@ function briefHtml(s, h, state) {
     g.list.slice(0, 3).forEach((o, i) => o.items.forEach(it => { const f = freq.get(it.key) || { name: it.name, n: 0, qty: it.qty, first: i }; f.n++; if (i < f.first) { f.first = i; f.qty = it.qty; } freq.set(it.key, f); }));
     const usual = [...freq.values()].sort((a, c) => c.n - a.n || c.qty - a.qty).slice(0, 6);
     return `<div class="co-brief"><div class="row between"><b>${esc(g.name)}</b><span class="amt">${money(last.total)} · ${esc(shortDate(last.date))}</span></div>
-      <div class="hint">${n90} order${n90 === 1 ? "" : "s"} in 90 days · average ${money(cents(avg))}${last.rep && last.rep !== S.rep ? ` · last by ${esc(last.rep)}` : ""}</div>
-      ${usual.length ? `<div class="usual"><span class="u-l">Usually</span>${usual.map(u => `<span>${esc(u.name)} ×${u.qty}</span>`).join("")}</div>` : ""}</div>`;
+      <div class="hint">${T`${n90} order${pl(n90)} in 90 days · average ${money(cents(avg))}`}${last.rep && last.rep !== S.rep ? T` · last by ${esc(last.rep)}` : ""}</div>
+      ${usual.length ? `<div class="usual"><span class="u-l">${tt("Usually")}</span>${usual.map(u => `<span>${esc(u.name)} ×${u.qty}</span>`).join("")}</div>` : ""}</div>`;
   }).join("");
   const tasks = h.tasks.map(t => {
     const late = t.due && t.due < today(), title = t.title.replace(" · " + label(s), "").replace(" · " + s.name, "");
-    return `<div class="task${late ? " late" : ""}">${esc(title)}${t.due ? ` · ${late ? daysBetween(t.due, today()) + " days late" : "due " + esc(shortDate(t.due))}` : ""}</div>`;
+    return `<div class="task${late ? " late" : ""}">${esc(title)}${t.due ? " · " + (late ? (n => T`${n} day${pl(n)} late`)(daysBetween(t.due, today())) : T`due ${esc(shortDate(t.due))}`) : ""}</div>`;
   }).join("");
-  const when = b && b.at ? new Intl.DateTimeFormat("en-CA", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: C.timeZone }).format(new Date(b.at)).replace(/\.$/, "") : "";
-  const foot = !connected() ? `This phone's history only. Connect ${esc(CRM)} in Reports to see orders from the team and the laptop.`
-    : state === "loading" ? (b ? `Saved copy from ${when}. Checking ${esc(CRM)}…` : `Checking ${esc(CRM)}…`)
-    : state === "failed" ? (b ? `Saved copy from ${when}. Could not reach ${esc(CRM)}.` : `Could not reach ${esc(CRM)}. Showing this phone's history.`)
-    : state === "offline" ? (b ? `Saved copy from ${when}. No signal right now.` : `No signal. Showing this phone's history.`)
-    : b ? (b.found ? `Up to date with ${esc(CRM)}.` : `Not in ${esc(CRM)} yet. It is added with the first note or order.`) : "";
-  return `<div class="card brief"><h2>Before you go in</h2>
+  const when = b && b.at ? new Intl.DateTimeFormat(LOC, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: C.timeZone }).format(new Date(b.at)).replace(/\.$/, "") : "";
+  const foot = !connected() ? T`This phone's history only. Connect ${esc(CRM)} in Reports to see orders from the team and the laptop.`
+    : state === "loading" ? (b ? T`Saved copy from ${when}. Checking ${esc(CRM)}…` : T`Checking ${esc(CRM)}…`)
+    : state === "failed" ? (b ? T`Saved copy from ${when}. Could not reach ${esc(CRM)}.` : T`Could not reach ${esc(CRM)}. Showing this phone's history.`)
+    : state === "offline" ? (b ? T`Saved copy from ${when}. No signal right now.` : tt("No signal. Showing this phone's history."))
+    : b ? (b.found ? T`Up to date with ${esc(CRM)}.` : T`Not in ${esc(CRM)} yet. It is added with the first note or order.`) : "";
+  return `<div class="card brief"><h2>${tt("Before you go in")}</h2>
     <div class="due ${st.cls}">${esc(st.text)}</div>
-    <div class="stats"><div class="stat"><b>${d.visit ? esc(ago(d.visit)) : "Never"}</b><span>last visit${d.visit ? " · " + esc(shortDate(d.visit)) : ""}</span></div>
-      <div class="stat"><b>${d.order ? esc(ago(d.order)) : "Never"}</b><span>last order${d.order ? " · " + esc(shortDate(d.order)) : ""}</span></div></div>
-    ${coHtml}${tasks ? `<div class="label">Open follow-ups</div>${tasks}` : ""}
+    <div class="stats"><div class="stat"><b>${d.visit ? esc(ago(d.visit)) : tt("Never")}</b><span>${tt("last visit")}${d.visit ? " · " + esc(shortDate(d.visit)) : ""}</span></div>
+      <div class="stat"><b>${d.order ? esc(ago(d.order)) : tt("Never")}</b><span>${tt("last order")}${d.order ? " · " + esc(shortDate(d.order)) : ""}</span></div></div>
+    ${coHtml}${tasks ? `<div class="label">${tt("Open follow-ups")}</div>${tasks}` : ""}
     ${foot ? `<p class="hint">${foot}</p>` : ""}</div>`;
 }
 const mapsHref = s => "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent([s.name, s.address, s.city, s.postal].filter(Boolean).join(", "));
@@ -779,15 +801,15 @@ async function openStore(id) {
   const [notes, orders] = await Promise.all([storeNotes(id).catch(() => []), storeOrders(id).catch(() => [])]);
   const inR = S.route.includes(id);
   openSheet(s.name, `
-    <div class="card"><div class="addr">${esc(s.address || "No street address")}<br>${esc([s.city, s.postal].filter(Boolean).join(" "))}
-      ${s.address ? `<br><a href="${esc(mapsHref(s))}" target="_blank" rel="noopener">Open in maps</a>` : ""}</div>
-      <div class="hint">${[regionOf(s), (m.storeNo || s.storeNo) ? "Store #" + esc(m.storeNo || s.storeNo) : "", (m.contact || s.contact) ? "Contact: " + esc(m.contact || s.contact) : "",
-        !s.address ? "Not on the map" : g && g.lat ? (g.approx ? "Approximate pin" : "Exact pin") : "Pin not placed yet"].filter(Boolean).join(" · ")}</div>
-      ${s.phone ? `<a class="btn" href="tel:${esc(s.phone.replace(/[^\d+]/g, ""))}">Call ${esc(s.phone)}</a>` : ""}
+    <div class="card"><div class="addr">${esc(s.address || tt("No street address"))}<br>${esc([s.city, s.postal].filter(Boolean).join(" "))}
+      ${s.address ? `<br><a href="${esc(mapsHref(s))}" target="_blank" rel="noopener">${tt("Open in maps")}</a>` : ""}</div>
+      <div class="hint">${[regionOf(s), (m.storeNo || s.storeNo) ? tt("Store #") + esc(m.storeNo || s.storeNo) : "", (m.contact || s.contact) ? tt("Contact: ") + esc(m.contact || s.contact) : "",
+        !s.address ? tt("Not on the map") : g && g.lat ? (g.approx ? tt("Approximate pin") : tt("Exact pin")) : tt("Pin not placed yet")].filter(Boolean).join(" · ")}</div>
+      ${s.phone ? `<a class="btn" href="tel:${esc(s.phone.replace(/[^\d+]/g, ""))}">${T`Call ${esc(s.phone)}`}</a>` : ""}
       ${s.email ? `<div class="hint">${esc(s.email)}</div>` : ""}</div>
-    <div class="grid2"><button class="btn primary" data-go="order">Order</button><button class="btn primary" data-go="note">Note</button></div>
+    <div class="grid2"><button class="btn primary" data-go="order">${tt("Order")}</button><button class="btn primary" data-go="note">${tt("Note")}</button></div>
     <div id="sbBrief"></div>
-    <button class="btn" data-go="route">${inR ? "Remove from route" : "Add to route"}</button>
+    <button class="btn" data-go="route">${inR ? tt("Remove from route") : tt("Add to route")}</button>
     <div id="sbHist"></div>`);
   const seq = sheetSeq;
   const paint = state => {
@@ -796,9 +818,9 @@ async function openStore(id) {
     const by = x => x.rep && x.rep !== S.rep ? ", " + esc(x.rep) : "";
     $("#sbBrief").innerHTML = briefHtml(s, h, state);
     $("#sbHist").innerHTML = `
-      <div class="card"><h2>Last visit</h2>${lastN ? `<div class="hint">${niceDate(lastN.date)}${lastN.remote ? " · from " + esc(CRM) : ""}${by(lastN)}</div><div class="note-last">${esc(lastN.text)}</div>${photosHtml(lastN.photos)}` : `<p class="hint">No earlier note.</p>`}</div>
-      <div class="card"><h2>Orders</h2>${h.orders.length ? `<div class="hist">${h.orders.slice(0, 8).map(o => { const co = o.coId ? company(o.coId) : null; return `<div class="h"><b>${esc(o.coName)} · ${money(o.total)}</b>${co && co.minimum && o.total < co.minimum ? " · under minimum" : ""}<small>${niceDate(o.date)}${o.po ? " · PO " + esc(o.po) : ""}${o.remote ? " · from " + esc(CRM) : ""}${by(o)}${o.pending ? " · waiting to sync" : ""}</small></div>`; }).join("")}</div>` : `<p class="hint">No order for this store yet.</p>`}</div>
-      ${earlier.length ? `<div class="card"><h2>Earlier notes</h2><div class="hist">${earlier.map(n => `<div class="h"><small>${niceDate(n.date)}${by(n)}</small><div class="note-last">${esc(n.text)}</div></div>`).join("")}</div></div>` : ""}`;
+      <div class="card"><h2>${tt("Last visit")}</h2>${lastN ? `<div class="hint">${niceDate(lastN.date)}${lastN.remote ? T` · from ${esc(CRM)}` : ""}${by(lastN)}</div><div class="note-last">${esc(lastN.text)}</div>${photosHtml(lastN.photos)}` : `<p class="hint">${tt("No earlier note.")}</p>`}</div>
+      <div class="card"><h2>${tt("Orders")}</h2>${h.orders.length ? `<div class="hist">${h.orders.slice(0, 8).map(o => { const co = o.coId ? company(o.coId) : null; return `<div class="h"><b>${esc(o.coName)} · ${money(o.total)}</b>${co && co.minimum && o.total < co.minimum ? tt(" · under minimum") : ""}<small>${niceDate(o.date)}${o.po ? " · PO " + esc(o.po) : ""}${o.remote ? T` · from ${esc(CRM)}` : ""}${by(o)}${o.pending ? tt(" · waiting to sync") : ""}</small></div>`; }).join("")}</div>` : `<p class="hint">${tt("No order for this store yet.")}</p>`}</div>
+      ${earlier.length ? `<div class="card"><h2>${tt("Earlier notes")}</h2><div class="hist">${earlier.map(n => `<div class="h"><small>${niceDate(n.date)}${by(n)}</small><div class="note-last">${esc(n.text)}</div></div>`).join("")}</div></div>` : ""}`;
   };
   paint(!connected() ? "" : navigator.onLine ? "loading" : "offline");
   $("#sheetContent").onclick = e => {
@@ -811,7 +833,7 @@ async function openStore(id) {
     catch (e) { paint("failed"); }
   }
 }
-const photosHtml = (ph, rm) => ph && ph.length ? `<div class="photos">${ph.map((p, i) => `<div class="ph"><img src="${p}" alt="Visit photo ${i + 1}">${rm ? `<button class="rm" type="button" data-rmph="${i}" aria-label="Remove photo">✕</button>` : ""}</div>`).join("")}</div>` : "";
+const photosHtml = (ph, rm) => ph && ph.length ? `<div class="photos">${ph.map((p, i) => `<div class="ph"><img src="${p}" alt="${T`Visit photo ${i + 1}`}">${rm ? `<button class="rm" type="button" data-rmph="${i}" aria-label="${tt("Remove photo")}">✕</button>` : ""}</div>`).join("")}</div>` : "";
 
 /* ---------- visit notes ---------- */
 function shrink(file) {
@@ -830,21 +852,21 @@ async function openNote(id) {
   const s = byId.get(id);
   const last = await lastNoteFor(id).catch(() => null); let editing = null, photos = [], text = "";
   const draw = () => {
-    openSheet("Note · " + s.name, `
-      <div class="card"><h2>Last visit</h2>${last ? `<div class="hint">${niceDate(last.date)}${last.remote ? " · from " + CRM : ""}</div><div class="note-last">${esc(last.text)}</div>${photosHtml(last.photos)}
-        ${editing ? "" : `<button class="btn small" type="button" id="nEdit">Edit</button>`}` : `<p class="hint">No earlier note.</p>`}</div>
-      <div class="card"><h2>${editing ? "Edit the last note" : "What happened"}</h2>
-        <textarea id="nText" maxlength="4000" placeholder="Type, or tap the microphone on the keyboard to dictate.">${esc(text)}</textarea>
+    openSheet(tt("Note") + " · " + s.name, `
+      <div class="card"><h2>${tt("Last visit")}</h2>${last ? `<div class="hint">${niceDate(last.date)}${last.remote ? T` · from ${esc(CRM)}` : ""}</div><div class="note-last">${esc(last.text)}</div>${photosHtml(last.photos)}
+        ${editing ? "" : `<button class="btn small" type="button" id="nEdit">${tt("Edit")}</button>`}` : `<p class="hint">${tt("No earlier note.")}</p>`}</div>
+      <div class="card"><h2>${editing ? tt("Edit the last note") : tt("What happened")}</h2>
+        <textarea id="nText" maxlength="4000" placeholder="${tt("Type, or tap the microphone on the keyboard to dictate.")}">${esc(text)}</textarea>
         <div class="counter" id="nCount"></div>
         ${photosHtml(photos, true)}
-        <label class="btn" for="nPhoto" ${photos.length >= 4 ? "hidden" : ""}>Add photo (${photos.length} of 4)</label>
+        <label class="btn" for="nPhoto" ${photos.length >= 4 ? "hidden" : ""}>${T`Add photo (${photos.length} of 4)`}</label>
         <input id="nPhoto" type="file" accept="image/*" multiple hidden></div>`,
-      editing ? `<div class="row gap"><button class="btn" id="nCancel" type="button">Cancel</button><button class="btn primary" id="nSave" type="button">Update the note</button></div>`
-              : `<button class="btn primary" id="nSave" type="button">Save note</button>`);
-    const ta = $("#nText"), cnt = () => { $("#nCount").textContent = `${ta.value.length} / 4,000`; };
+      editing ? `<div class="row gap"><button class="btn" id="nCancel" type="button">${tt("Cancel")}</button><button class="btn primary" id="nSave" type="button">${tt("Update the note")}</button></div>`
+              : `<button class="btn primary" id="nSave" type="button">${tt("Save note")}</button>`);
+    const ta = $("#nText"), cnt = () => { $("#nCount").textContent = `${ta.value.length} / ${(4000).toLocaleString(LOC)}`; };
     ta.oninput = () => { text = ta.value; cnt(); }; cnt();
     $("#nPhoto").onchange = async e => {
-      for (const f of [...e.target.files].slice(0, 4 - photos.length)) { try { photos.push(await shrink(f)); } catch (x) { toast("That photo could not be read. Try another one.", true); } }
+      for (const f of [...e.target.files].slice(0, 4 - photos.length)) { try { photos.push(await shrink(f)); } catch (x) { toast(tt("That photo could not be read. Try another one."), true); } }
       draw();
     };
     $("#sheetContent").onclick = e => {
@@ -855,14 +877,14 @@ async function openNote(id) {
       if (e.target.id === "nCancel") { editing = null; text = ""; photos = []; return draw(); }
       if (e.target.id !== "nSave") return;
       const t = text.trim();
-      if (!t && !photos.length) return toast("Write a few words or add a photo first.", true);
+      if (!t && !photos.length) return toast(tt("Write a few words or add a photo first."), true);
       try {
         if (editing && editing.remote) await put("notes", { storeId: id, storeName: s.name, rep: S.rep, date: editing.date, ts: Date.now(), text: t,
           photos: (editing.photos || []).concat(photos), photoUrls: editing.photoUrls || [], ghlNoteId: editing.ghlNoteId, edited: Date.now(), sync: "pending" });
         else if (editing) await put("notes", { ...editing, text: t, photos: (editing.photos || []).concat(photos), edited: Date.now(), sync: "pending" });
         else await put("notes", { storeId: id, storeName: s.name, rep: S.rep, date: today(), ts: Date.now(), text: t, photos, sync: "pending" });
-        await refreshDone(); syncSoon(); toast(editing ? "Note updated." : "Note saved on this store."); closeSheet();
-      } catch (x) { toast("The note could not be saved on this phone. Free some storage and try again.", true); }
+        await refreshDone(); syncSoon(); toast(editing ? tt("Note updated.") : tt("Note saved on this store.")); closeSheet();
+      } catch (x) { toast(tt("The note could not be saved on this phone. Free some storage and try again."), true); }
     };
   };
   draw();
@@ -1033,13 +1055,13 @@ async function deliver(blob, name) {
       if (e.name === "NotAllowedError") return "again";
     }
   }
-  if (isTouch() && standalone()) { toast("Mail will not open from the Home Screen icon. Open this site in Safari and send again.", true); return "blocked"; }
+  if (isTouch() && standalone()) { toast(tt("Mail will not open from the Home Screen icon. Open this site in Safari and send again."), true); return "blocked"; }
   download(blob, name); return "downloaded";
 }
 function pickCompany(id) {
   const s = byId.get(id), last = (LS.get("lastCompany", {}))[id];
-  openSheet("Order · " + s.name, `<div class="addr"><b>${esc(s.name)}</b><br>${esc([s.address, s.city].filter(Boolean).join(", ") || "No street address")}</div>
-    <p class="hint">Which company is this order for?</p>
+  openSheet(tt("Order") + " · " + s.name, `<div class="addr"><b>${esc(s.name)}</b><br>${esc([s.address, s.city].filter(Boolean).join(", ") || tt("No street address"))}</div>
+    <p class="hint">${tt("Which company is this order for?")}</p>
     ${COMPANIES.map(co => `<button class="btn ${co.id === last ? "primary" : ""} big-pick" type="button" data-co="${esc(co.id)}">${esc(co.name)}</button>`).join("")}`);
   $("#sheetContent").onclick = e => { const b = e.target.closest("[data-co]"); if (b) openOrder(id, b.dataset.co); };
 }
@@ -1074,7 +1096,7 @@ function findByBarcode(co, raw, fmt) {
 const SC = { stream: null, timer: null, last: "", lastAt: 0, audio: null, decode: null, busy: false };
 function loadZXing() {
   if (window.ZXingLite) return Promise.resolve();
-  return new Promise((res, rej) => { const el = document.createElement("script"); el.src = "zxing.min.js?v=14"; el.onload = res; el.onerror = () => rej(new Error("load")); document.head.appendChild(el); });
+  return new Promise((res, rej) => { const el = document.createElement("script"); el.src = "zxing.min.js?v=16"; el.onload = res; el.onerror = () => rej(new Error("load")); document.head.appendChild(el); });
 }
 function beep(ok) {
   try {
@@ -1112,22 +1134,22 @@ function stopScanner() {
 async function openScanner(title, onCode, onCard, onClose) {
   try { SC.audio = SC.audio || new (window.AudioContext || window.webkitAudioContext)(); SC.audio.resume(); } catch (e) { SC.audio = null; }
   const box = $("#scanner"), card = $("#scanCard"), band = $("#scanBand");
-  $("#scanTitle").textContent = title; card.innerHTML = `<p class="hint">Starting the camera…</p>`;
+  $("#scanTitle").textContent = title; card.innerHTML = `<p class="hint">${tt("Starting the camera…")}</p>`;
   box.hidden = false; document.body.classList.add("scanning");
   let count = 0;
   const done = () => { stopScanner(); onClose(count); };
   $("#scanDone").onclick = done;
-  card.onclick = e => { const r = onCard(e); if (r) { card.innerHTML = r.html; if (r.added) { count++; $("#scanCount").textContent = `${count} added`; } } };
+  card.onclick = e => { const r = onCard(e); if (r) { card.innerHTML = r.html; if (r.added) { count++; $("#scanCount").textContent = T`${count} added`; } } };
   if (!window.isSecureContext || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    card.innerHTML = `<b>The camera is not available here.</b><p class="hint">Open La Run from its usual https address, or type the barcode digits in the search box.</p>`; return;
+    card.innerHTML = `<b>${tt("The camera is not available here.")}</b><p class="hint">${tt("Open La Run from its usual https address, or type the barcode digits in the search box.")}</p>`; return;
   }
   try {
     await loadZXing();
     SC.stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } } });
   } catch (e) {
-    const why = e && e.name === "NotAllowedError" ? "Camera access is blocked for La Run. On iPhone: Settings > Safari > Camera > Allow, then reopen the app."
-      : e && e.name === "NotFoundError" ? "No camera was found on this device." : e && e.message === "load" ? "The scanner could not load. Reopen the app once with signal so it is saved for offline use." : "The camera could not start.";
-    card.innerHTML = `<b>${esc(why)}</b><p class="hint">You can type the barcode digits in the search box instead.</p>`; return;
+    const why = e && e.name === "NotAllowedError" ? tt("Camera access is blocked for La Run. On iPhone: Settings > Safari > Camera > Allow, then reopen the app.")
+      : e && e.name === "NotFoundError" ? tt("No camera was found on this device.") : e && e.message === "load" ? tt("The scanner could not load. Reopen the app once with signal so it is saved for offline use.") : tt("The camera could not start.");
+    card.innerHTML = `<b>${esc(why)}</b><p class="hint">${tt("You can type the barcode digits in the search box instead.")}</p>`; return;
   }
   if (box.hidden) return stopScanner();   // closed while the camera was starting
   const v = $("#scanVideo"); v.srcObject = SC.stream; v.setAttribute("playsinline", ""); v.muted = true;
@@ -1136,7 +1158,7 @@ async function openScanner(title, onCode, onCard, onClose) {
   const tb = $("#scanTorch"); tb.hidden = !caps.torch; let torch = false;
   tb.onclick = () => { torch = !torch; track.applyConstraints({ advanced: [{ torch }] }).catch(() => {}); tb.classList.toggle("on", torch); };
   $("#scanCount").textContent = "";
-  card.innerHTML = `<p class="hint">Hold the barcode inside the frame. Each scan adds one; use + and − to adjust.</p>`;
+  card.innerHTML = `<p class="hint">${tt("Hold the barcode inside the frame. Each scan adds one; use + and − to adjust.")}</p>`;
   SC.decode = makeDecoder();
   const tick = async () => {
     if (!SC.stream || SC.busy) return;
@@ -1149,7 +1171,7 @@ async function openScanner(title, onCode, onCard, onClose) {
       if (r.text !== SC.last || now - SC.lastAt > 2500) {    // the same barcode held in view counts once
         SC.last = r.text; SC.lastAt = now;
         const out = onCode(r.text, r.fmt); card.innerHTML = out.html; beep(out.ok);
-        if (out.added) { count++; $("#scanCount").textContent = `${count} added`; }
+        if (out.added) { count++; $("#scanCount").textContent = T`${count} added`; }
         band.className = "scan-band " + (out.ok ? "hit" : "miss"); setTimeout(() => { band.className = "scan-band"; }, 600);
       } else SC.lastAt = now;
     }
@@ -1163,8 +1185,8 @@ async function openOrder(id, coId) {
   if (!coId) { if (COMPANIES.length > 1) return pickCompany(id); coId = COMPANIES[0].id; }
   const co = company(coId), s = byId.get(id), m = S.meta[id] || {};
   if (co.kind === "catalog" && !co.byId.size) {
-    openSheet(`${co.name} · ${s.name}`, `<p class="hint">Loading the ${esc(co.name)} catalog…</p>`);
-    try { await loadCatalog(co); } catch (e) { return toast(`The ${co.name} catalog could not load. Check your signal and try again.`, true); }
+    openSheet(`${co.name} · ${s.name}`, `<p class="hint">${T`Loading the ${esc(co.name)} catalog…`}</p>`);
+    try { await loadCatalog(co); } catch (e) { return toast(T`The ${co.name} catalog could not load. Check your signal and try again.`, true); }
   }
   const lc = LS.get("lastCompany", {}); lc[id] = co.id; LS.set("lastCompany", lc);
   if (!BR.cache[id] || Date.now() - BR.cache[id].at > 15 * 60e3) fetchBrief(id).catch(() => {});   // fresh history for "Last order"
@@ -1178,49 +1200,49 @@ async function openOrder(id, coId) {
   const prodRow = p => {
     const margin = p.srp > 0 ? Math.round((p.srp - p.price) / p.srp * 100) : null;
     const sub = catalog ? `${esc(p.group)} · ${esc(p.code)} · ${money(p.price)}${p.srp ? ` · PDSF ${money(p.srp)}` : ""}${margin != null ? ` · marge ${margin}%` : ""}`
-      : `${esc(p.size)} · ${money(p.price)} ${p.by === "case" ? "a case" : "each"}`;
+      : `${esc(p.size)} · ${money(p.price)} ${p.by === "case" ? tt("a case") : tt("each")}`;
     return `<div class="prod" data-p="${esc(p.id)}"><div class="pt"><div class="pn">${esc(p.name)}</div><div class="pp">${sub}</div></div>
-      <div class="step"><button type="button" data-d="-1" aria-label="One less ${esc(p.name)}">−</button>
-      <input type="number" inputmode="numeric" min="0" max="999" step="1" value="${qty[p.id] || 0}" aria-label="Quantity ${esc(p.name)}">
-      <button type="button" data-d="1" aria-label="One more ${esc(p.name)}">+</button></div></div>`;
+      <div class="step"><button type="button" data-d="-1" aria-label="${T`One less ${esc(p.name)}`}">−</button>
+      <input type="number" inputmode="numeric" min="0" max="999" step="1" value="${qty[p.id] || 0}" aria-label="${T`Quantity ${esc(p.name)}`}">
+      <button type="button" data-d="1" aria-label="${T`One more ${esc(p.name)}`}">+</button></div></div>`;
   };
   const hasUpc = co.products.some(p => upcKey(p.upc).length >= 8 || upcKey(p.upcCase).length >= 8);
-  const scanBtn = hasUpc ? `<button class="btn small scan-btn" id="cScan" type="button" aria-label="Scan a barcode">Scan</button>` : "";
+  const scanBtn = hasUpc ? `<button class="btn small scan-btn" id="cScan" type="button" aria-label="${tt("Scan a barcode")}">${tt("Scan")}</button>` : "";
   const brands = catalog ? [...new Set(co.products.map(p => p.group))].sort((a, b) => a.localeCompare(b, "fr")) : [];
-  const fixedList = () => [...new Set(co.products.map(p => p.group))].map(g => `<div class="grp">${esc(g)}, by the ${co.products.find(p => p.group === g).by}</div>` + co.products.filter(p => p.group === g).map(prodRow).join("")).join("");
+  const fixedList = () => [...new Set(co.products.map(p => p.group))].map(g => `<div class="grp">${co.products.find(p => p.group === g).by === "case" ? T`${esc(g)}, by the case` : T`${esc(g)}, by the unit`}</div>` + co.products.filter(p => p.group === g).map(prodRow).join("")).join("");
   openSheet(`${co.name} · ${s.name}`, `
-    <div class="addr"><b>${esc(s.name)}</b><br>${esc([s.address, s.city].filter(Boolean).join(", ") || "No street address")}</div>
-    <details class="fold"><summary>Order sheet details</summary><div class="in">
-      ${field(f.address, "oAddr", "Address printed on the sheet", head.address)}
-      <div class="grid2">${field(f.storeNumber, "oNo", "Store number", head.storeNo, 'inputmode="numeric"')}${field(f.po, "oPo", "PO", "")}</div>
-      ${field(f.contact, "oContact", "Contact at the store", head.contact)}
-      ${field(f.phone, "oPhone", "Store phone", head.phone, 'inputmode="tel"')}${field(f.email, "oEmail", "Store email", head.email, 'inputmode="email"')}
-      ${field(f.rep, "oRep", "Rep", head.rep)}</div></details>
+    <div class="addr"><b>${esc(s.name)}</b><br>${esc([s.address, s.city].filter(Boolean).join(", ") || tt("No street address"))}</div>
+    <details class="fold"><summary>${tt("Order sheet details")}</summary><div class="in">
+      ${field(f.address, "oAddr", tt("Address printed on the sheet"), head.address)}
+      <div class="grid2">${field(f.storeNumber, "oNo", tt("Store number"), head.storeNo, 'inputmode="numeric"')}${field(f.po, "oPo", "PO", "")}</div>
+      ${field(f.contact, "oContact", tt("Contact at the store"), head.contact)}
+      ${field(f.phone, "oPhone", tt("Store phone"), head.phone, 'inputmode="tel"')}${field(f.email, "oEmail", tt("Store email"), head.email, 'inputmode="email"')}
+      ${field(f.rep, "oRep", tt("Rep"), head.rep)}</div></details>
     ${catalog ? `<div class="cat-tools">
-      <div class="row"><input id="cSearch" type="search" placeholder="Product, code, brand or barcode" autocomplete="off" aria-label="Search the catalog">
+      <div class="row"><input id="cSearch" type="search" placeholder="${tt("Product, code, brand or barcode")}" autocomplete="off" aria-label="${tt("Search the catalog")}">
       ${scanBtn}</div>
-      <select id="cBrand" aria-label="Brand"><option value="">All brands</option>${brands.map(b => `<option value="${esc(b)}">${esc(b)}</option>`).join("")}</select>
-      <div class="row gap"><button class="btn small" id="cMine" type="button"></button><button class="btn small" id="cLast" type="button">Last order</button></div></div>
-      <div id="cList"></div>` : `<div class="row gap"><button class="btn small" id="cLast" type="button">Last order</button>${scanBtn}</div>` + fixedList()}`,
-    `<div class="total-row"><div><div class="label">Total</div><div class="min-msg" id="oMin"></div></div><div class="big" id="oTotal"></div></div>
-     <div class="row gap"><button class="btn" id="oXlsx" type="button">Preview</button><button class="btn primary" id="oSend" type="button" style="flex:2">Send order</button></div>
-     <div class="hint">Send to ${esc(co.orderEmail)}</div>`,
+      <select id="cBrand" aria-label="${tt("Brand")}"><option value="">${tt("All brands")}</option>${brands.map(b => `<option value="${esc(b)}">${esc(b)}</option>`).join("")}</select>
+      <div class="row gap"><button class="btn small" id="cMine" type="button"></button><button class="btn small" id="cLast" type="button">${tt("Last order")}</button></div></div>
+      <div id="cList"></div>` : `<div class="row gap"><button class="btn small" id="cLast" type="button">${tt("Last order")}</button>${scanBtn}</div>` + fixedList()}`,
+    `<div class="total-row"><div><div class="label">${tt("Total")}</div><div class="min-msg" id="oMin"></div></div><div class="big" id="oTotal"></div></div>
+     <div class="row gap"><button class="btn" id="oXlsx" type="button">${tt("Preview")}</button><button class="btn primary" id="oSend" type="button" style="flex:2">${tt("Send order")}</button></div>
+     <div class="hint">${T`Send to ${esc(co.orderEmail)}`}</div>`,
     () => { clearTimeout(buildT); if (sent) { delete S.drafts[dkey]; delete S.drafts[id]; LS.set("drafts", S.drafts); } });
 
   const norm = x => String(x || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
   const renderCat = () => {
     if (!catalog) return;
     const n = Object.keys(qty).length;
-    $("#cMine").textContent = `In this order (${n})`; $("#cMine").className = "btn small" + (view === "order" ? " primary" : "");
+    $("#cMine").textContent = T`In this order (${n})`; $("#cMine").className = "btn small" + (view === "order" ? " primary" : "");
     let list, note = "";
-    if (view === "order") { list = co.products.filter(p => qty[p.id] > 0); if (!list.length) note = "Nothing in this order yet. Search a product or pick a brand."; }
+    if (view === "order") { list = co.products.filter(p => qty[p.id] > 0); if (!list.length) note = tt("Nothing in this order yet. Search a product or pick a brand."); }
     else {
       const words = norm(q).split(/\s+/).filter(Boolean), digits = q.replace(/\D/g, "");
-      if (!words.length && !brand) { list = []; note = `Search the ${co.products.length} products, or pick a brand.`; }
+      if (!words.length && !brand) { list = []; note = T`Search the ${co.products.length.toLocaleString(LOC)} products, or pick a brand.`; }
       else list = co.products.filter(p => (!brand || p.group === brand) && (!words.length || words.every(w => norm(`${p.name} ${p.group} ${p.code}`).includes(w)) || (digits.length >= 4 && p.upc.replace(/\D/g, "").includes(digits))));
     }
     const cap = 80, more = list.length - cap;
-    $("#cList").innerHTML = (list.length ? list.slice(0, cap).map(prodRow).join("") : "") + (note ? `<p class="hint">${note}</p>` : "") + (more > 0 ? `<p class="hint">${more} more. Narrow the search.</p>` : "") + (view === "browse" && list.length === 0 && !note ? `<p class="hint">No product matches.</p>` : "");
+    $("#cList").innerHTML = (list.length ? list.slice(0, cap).map(prodRow).join("") : "") + (note ? `<p class="hint">${note}</p>` : "") + (more > 0 ? `<p class="hint">${T`${more} more. Narrow the search.`}</p>` : "") + (view === "browse" && list.length === 0 && !note ? `<p class="hint">${tt("No product matches.")}</p>` : "");
   };
   const v = idv => { const el = $("#" + idv); return el ? el.value.trim() : ""; };
   const readHead = () => { head.address = v("oAddr"); head.storeNo = v("oNo"); head.po = v("oPo"); head.contact = v("oContact"); head.rep = v("oRep"); head.phone = v("oPhone"); head.email = v("oEmail"); };
@@ -1234,13 +1256,13 @@ async function openOrder(id, coId) {
     const mm = $("#oMin"), send = $("#oSend"), n = Object.values(qty).reduce((a, b) => a + b, 0);
     document.querySelectorAll("#sheetContent .prod").forEach(el => { const k = qty[el.dataset.p] || 0; el.classList.toggle("has", k > 0); const inp = el.querySelector("input"); if (document.activeElement !== inp) inp.value = k; });
     if (catalog) {
-      $("#cMine").textContent = `In this order (${Object.keys(qty).length})`;
+      $("#cMine").textContent = T`In this order (${Object.keys(qty).length})`;
       const per = {}; for (const [k, n] of Object.entries(qty)) { const p = co.byId.get(k); if (p) per[p.group] = (per[p.group] || 0) + n; }
-      for (const o of $("#cBrand").options) if (o.value) o.textContent = o.value + (per[o.value] ? ` (${per[o.value]} in order)` : "");
+      for (const o of $("#cBrand").options) if (o.value) o.textContent = o.value + (per[o.value] ? T` (${per[o.value]} in order)` : "");
     }
-    if (total <= 0) { mm.className = "min-msg"; mm.textContent = "Add a product to send."; send.textContent = "Send order"; send.className = "btn primary"; send.disabled = true; $("#oXlsx").disabled = true; }
-    else if (min > 0 && total < min) { mm.className = "min-msg under"; mm.textContent = `${money(cents(min - total))} missing to reach ${money(min)}`; send.textContent = "Send anyway"; send.className = "btn warn"; send.disabled = false; $("#oXlsx").disabled = false; }
-    else { mm.className = "min-msg ok"; mm.textContent = min > 0 ? `Minimum of ${money(min)} reached` : `${n} unit${n === 1 ? "" : "s"}, ${Object.keys(qty).length} product${Object.keys(qty).length === 1 ? "" : "s"}`; send.textContent = "Send order"; send.className = "btn primary"; send.disabled = false; $("#oXlsx").disabled = false; }
+    if (total <= 0) { mm.className = "min-msg"; mm.textContent = tt("Add a product to send."); send.textContent = tt("Send order"); send.className = "btn primary"; send.disabled = true; $("#oXlsx").disabled = true; }
+    else if (min > 0 && total < min) { mm.className = "min-msg under"; mm.textContent = T`${money(cents(min - total))} missing to reach ${money(min)}`; send.textContent = tt("Send anyway"); send.className = "btn warn"; send.disabled = false; $("#oXlsx").disabled = false; }
+    else { mm.className = "min-msg ok"; mm.textContent = min > 0 ? T`Minimum of ${money(min)} reached` : T`${n} unit${pl(n)}, ${Object.keys(qty).length} product${pl(Object.keys(qty).length)}`; send.textContent = tt("Send order"); send.className = "btn primary"; send.disabled = false; $("#oXlsx").disabled = false; }
   };
   const setQty = (pid, val) => { val = Math.max(0, Math.min(999, Math.floor(Number(val) || 0))); if (val) qty[pid] = val; else delete qty[pid]; S.drafts[dkey] = qty; LS.set("drafts", S.drafts); paint(); prebuild(); };
   $("#sheetContent").onclick = async e => {
@@ -1252,12 +1274,12 @@ async function openOrder(id, coId) {
       // Newest order for this company, from this phone or from the CRM (laptop, teammates).
       const local = await storeOrders(id).catch(() => []);
       const prev = storeHistory(id, [], local).orders.find(o => o.coId === co.id);
-      if (!prev) return toast(`No earlier ${co.name} order for this store.`);
+      if (!prev) return toast(T`No earlier ${co.name} order for this store.`);
       let added = 0, missing = 0;
       for (const it of prev.items) { if (co.byId.has(it.key) && it.qty > 0) { qty[it.key] = it.qty; added++; } else missing++; }
       S.drafts[dkey] = qty; LS.set("drafts", S.drafts); view = "order"; renderCat(); paint(); prebuild();
-      toast(`${added} product${added === 1 ? "" : "s"} from the ${niceDate(prev.date)} order${prev.rep && prev.rep !== S.rep ? " by " + prev.rep : ""}.` +
-        (missing ? ` ${missing} no longer in the catalog.` : "") + " Adjust the quantities.");
+      toast((prev.rep && prev.rep !== S.rep ? T`${added} product${pl(added)} from the ${niceDate(prev.date)} order by ${prev.rep}.` : T`${added} product${pl(added)} from the ${niceDate(prev.date)} order.`) +
+        (missing ? T` ${missing} no longer in the catalog.` : "") + tt(" Adjust the quantities."));
     }
   };
   $("#sheetContent").oninput = e => {
@@ -1271,16 +1293,16 @@ async function openOrder(id, coId) {
   $("#sheetFoot").onclick = async e => {
     if (e.target.id !== "oSend" && e.target.id !== "oXlsx") return;
     const o = snapshot();
-    if (o.total <= 0) return toast("An empty order cannot be sent. Add at least one product.", true);
+    if (o.total <= 0) return toast(tt("An empty order cannot be sent. Add at least one product."), true);
     const btn = e.target; btn.disabled = true;
     try {
       // The file is normally ready before the tap, so the share sheet opens inside the tap itself (Safari requires that).
       const blob = ready && ready.sig === sig(o) ? ready.blob : await buildOrderXlsx(o, co);
       ready = { sig: sig(o), blob };
       const how = await deliver(blob, o.fileName);
-      if (how === "again") { toast("The file is ready. Tap the button once more."); return; }
+      if (how === "again") { toast(tt("The file is ready. Tap the button once more.")); return; }
       if (how === "cancelled" || how === "blocked") return;
-      if (btn.id === "oXlsx") { toast(`Preview only. Nothing was saved or sent to ${CRM}. Tap Send order when it is right.`); return; }
+      if (btn.id === "oXlsx") { toast(T`Preview only. Nothing was saved or sent to ${CRM}. Tap Send order when it is right.`); return; }
       const rec = { storeId: id, companyId: co.id, storeName: s.name, rep: S.rep, repName: o.rep, date: o.date, ts: Date.now(), qty: o.qty, total: o.total, storeNo: o.storeNo, po: o.po,
         contact: o.contact, address: o.address, phone: o.phone, email: o.email,
         lines: Object.entries(o.qty).map(([k, n]) => { const p = co.byId.get(k); return { id: k, code: p.code || "", name: p.name, size: p.size || "", qty: n, price: p.price }; }) };
@@ -1293,25 +1315,25 @@ async function openOrder(id, coId) {
       savedId = null; sent = false; ready = null; view = "browse"; renderCat();
       S.meta[id] = Object.assign({}, S.meta[id], co.id === "reboot" ? { storeNo: o.storeNo, contact: o.contact, address: o.address } : { contact: o.contact }); LS.set("storeMeta", S.meta);
       await refreshDone();
-      toast(how === "shared" ? `Order saved on the store. In Mail, send it to ${co.orderEmail}.` : `Excel downloaded and order saved. Email it to ${co.orderEmail}.`);
+      toast(how === "shared" ? T`Order saved on the store. In Mail, send it to ${co.orderEmail}.` : T`Excel downloaded and order saved. Email it to ${co.orderEmail}.`);
     } catch (x) {
-      toast("The Excel order could not be created. Close the order, reopen it and try again.", true);
+      toast(tt("The Excel order could not be created. Close the order, reopen it and try again."), true);
     } finally { btn.disabled = false; paint(); }
   };
   // Scanning: each barcode adds one of that product; the card lets the rep set the quantity without leaving the camera.
   const scanCard = (p, note) => {
     const sub = catalog ? `${esc(p.group)} · ${esc(p.code)} · ${money(p.price)}${p.srp ? ` · PDSF ${money(p.srp)}` : ""}`
-      : `${esc(p.size)} · ${money(p.price)} ${p.by === "case" ? "a case" : "each"}`;
+      : `${esc(p.size)} · ${money(p.price)} ${p.by === "case" ? tt("a case") : tt("each")}`;
     return `${note ? `<div class="scan-note">${note}</div>` : ""}<div class="scan-prod"><div class="pt"><div class="pn">${esc(p.name)}</div><div class="pp">${sub}</div></div>
-      <div class="step" data-sp="${esc(p.id)}"><button type="button" data-sd="-1" aria-label="One less">−</button><span class="sq">${qty[p.id] || 0}</span><button type="button" data-sd="1" aria-label="One more">+</button></div></div>
-      <div class="hint">${money(orderTotal(qty, co))} in this order</div>`;
+      <div class="step" data-sp="${esc(p.id)}"><button type="button" data-sd="-1" aria-label="${tt("One less")}">−</button><span class="sq">${qty[p.id] || 0}</span><button type="button" data-sd="1" aria-label="${tt("One more")}">+</button></div></div>
+      <div class="hint">${T`${money(orderTotal(qty, co))} in this order`}</div>`;
   };
-  const scan = () => openScanner(`Scan · ${co.name}`, (text, fmt) => {
+  const scan = () => openScanner(tt("Scan") + " · " + co.name, (text, fmt) => {
     const m = findByBarcode(co, text, fmt);
-    if (!m.list.length) return { ok: false, html: `<b>Not in the ${esc(co.name)} catalog</b><p class="hint">Barcode ${esc(m.digits || text)}. Try searching it by name.</p>` };
-    if (m.list.length > 1) return { ok: true, html: `<b>This barcode is on ${m.list.length} products. Pick one:</b>` + m.list.map(p => `<button class="btn small pick-p" type="button" data-pick="${esc(p.id)}">${esc(p.name)}${p.code ? " · " + esc(p.code) : p.size ? " · " + esc(p.size) : ""}</button>`).join("") };
+    if (!m.list.length) return { ok: false, html: `<b>${T`Not in the ${esc(co.name)} catalog`}</b><p class="hint">${T`Barcode ${esc(m.digits || text)}. Try searching it by name.`}</p>` };
+    if (m.list.length > 1) return { ok: true, html: `<b>${T`This barcode is on ${m.list.length} products. Pick one:`}</b>` + m.list.map(p => `<button class="btn small pick-p" type="button" data-pick="${esc(p.id)}">${esc(p.name)}${p.code ? " · " + esc(p.code) : p.size ? " · " + esc(p.size) : ""}</button>`).join("") };
     const p = m.list[0]; setQty(p.id, (qty[p.id] || 0) + 1);
-    const note = p.by === "case" ? "Ordered by the case: one case added." : m.viaCase ? "Case barcode: one unit added. Adjust below." : "";
+    const note = p.by === "case" ? tt("Ordered by the case: one case added.") : m.viaCase ? tt("Case barcode: one unit added. Adjust below.") : "";
     return { ok: true, added: true, html: scanCard(p, note) };
   }, e => {
     const pk = e.target.closest("[data-pick]");
@@ -1319,7 +1341,7 @@ async function openOrder(id, coId) {
     const b = e.target.closest("[data-sd]"); if (!b) return null;
     const p = co.byId.get(b.closest("[data-sp]").dataset.sp); setQty(p.id, (qty[p.id] || 0) + Number(b.dataset.sd));
     return { html: scanCard(p) };
-  }, count => { view = "order"; renderCat(); paint(); prebuild(); if (count) toast(`${count} product${count === 1 ? "" : "s"} added by scanning.`); });
+  }, count => { view = "order"; renderCat(); paint(); prebuild(); if (count) toast(T`${count} product${pl(count)} added by scanning.`); });
   renderCat(); paint(); prebuild();
 }
 
@@ -1349,47 +1371,47 @@ async function renderReports() {
   if (!$("#weekPick").value) $("#weekPick").value = today();
   try {
     const m = await monthData($("#monthPick").value);
-    $("#monthStats").innerHTML = `<div class="stat"><b>${m.count}</b><span>orders</span></div><div class="stat"><b>${m.stores}</b><span>stores</span></div>
-      <div class="stat"><b>${money(m.total)}</b><span>total</span></div><div class="stat"><b>${m.underCount}</b><span>under the minimum</span></div>` + (m.byCo.length > 1 ? `<div class="stat" style="grid-column:1/-1"><span>${m.byCo.map(x => `${esc(x.name)}: ${x.count} order${x.count === 1 ? "" : "s"}, ${money(x.total)}`).join(" · ")}</span></div>` : "");
+    $("#monthStats").innerHTML = `<div class="stat"><b>${m.count}</b><span>${tt("orders")}</span></div><div class="stat"><b>${m.stores}</b><span>${tt("stores")}</span></div>
+      <div class="stat"><b>${money(m.total)}</b><span>${tt("total")}</span></div><div class="stat"><b>${m.underCount}</b><span>${tt("under the minimum")}</span></div>` + (m.byCo.length > 1 ? `<div class="stat" style="grid-column:1/-1"><span>${m.byCo.map(x => T`${esc(x.name)}: ${x.count} order${pl(x.count)}, ${money(x.total)}`).join(" · ")}</span></div>` : "");
     $("#monthXlsx").disabled = !m.count;
     const w = await weekData($("#weekPick").value);
-    $("#weekTable").innerHTML = w.rows.length ? `<table class="tbl"><thead><tr><th>Day</th><th class="num">km</th><th>Stores</th></tr></thead><tbody>
+    $("#weekTable").innerHTML = w.rows.length ? `<table class="tbl"><thead><tr><th>${tt("Day")}</th><th class="num">km</th><th>${tt("Stores")}</th></tr></thead><tbody>
       ${w.rows.map(r => `<tr><td>${esc(weekday(r.date).slice(0, 3))} ${esc(r.date.slice(5))}</td><td class="num">${r.km.toFixed(1)}</td><td>${esc(r.stores.join(", "))}</td></tr>`).join("")}</tbody>
-      <tfoot><tr><td>Total</td><td class="num">${w.total.toFixed(1)}</td><td>km, week of ${esc(w.mon)}</td></tr></tfoot></table>`
-      : `<p class="hint">No day saved in the week of ${esc(w.mon)}. Use Save this day on the Route screen.</p>`;
+      <tfoot><tr><td>${tt("Total")}</td><td class="num">${w.total.toFixed(1)}</td><td>${T`km, week of ${esc(w.mon)}`}</td></tr></tfoot></table>`
+      : `<p class="hint">${T`No day saved in the week of ${esc(w.mon)}. Use Save this day on the Route screen.`}</p>`;
     $("#weekXlsx").disabled = !w.rows.length;
-  } catch (e) { $("#monthStats").innerHTML = `<p class="hint">Saved data cannot be read in this browser. Private browsing blocks it.</p>`; }
+  } catch (e) { $("#monthStats").innerHTML = `<p class="hint">${tt("Saved data cannot be read in this browser. Private browsing blocks it.")}</p>`; }
 }
 $("#monthPick").addEventListener("change", renderReports);
 $("#weekPick").addEventListener("change", renderReports);
 $("#monthXlsx").addEventListener("click", async () => {
   try {
     const ym = $("#monthPick").value, m = await monthData(ym);
-    if (!m.count) return toast("No order saved in that month.");
+    if (!m.count) return toast(tt("No order saved in that month."));
     for (const co of COMPANIES) if (m.rows.some(o => (o.companyId || "reboot") === co.id)) await loadCatalog(co).catch(() => {});
     const wb = new ExcelJS.Workbook(), money2 = '#,##0.00 "$"';
     const sheet = (name, cols) => { const ws = wb.addWorksheet(name); ws.columns = cols.map(c => ({ header: c[0], key: c[1], width: c[2], style: c[3] ? { numFmt: c[3] } : {} })); ws.getRow(1).font = { bold: true }; ws.views = [{ state: "frozen", ySplit: 1 }]; return ws; };
-    const orders = sheet("Orders", [["Date", "date", 12], ["Company", "co", 12], ["Store", "store", 36], ["Store #", "no", 10], ["PO", "po", 14], ["Contact", "contact", 22], ["Lines", "lines", 8], ["Total", "total", 12, money2], ["Under minimum", "under", 14]]);
-    const lines = sheet("Lines", [["Date", "date", 12], ["Company", "co", 12], ["Store", "store", 36], ["Code", "code", 16], ["Product", "name", 44], ["Qty", "qty", 8], ["Price", "price", 11, money2], ["Line total", "lt", 12, money2]]);
+    const orders = sheet(tt("Orders"), [[tt("Date"), "date", 12], [tt("Company"), "co", 12], [tt("Store"), "store", 36], [tt("Store #"), "no", 10], ["PO", "po", 14], [tt("Contact"), "contact", 22], [tt("Lines"), "lines", 8], [tt("Total"), "total", 12, money2], [tt("Under minimum"), "under", 14]]);
+    const lines = sheet(tt("Lines"), [[tt("Date"), "date", 12], [tt("Company"), "co", 12], [tt("Store"), "store", 36], ["Code", "code", 16], [tt("Product"), "name", 44], [tt("Qty"), "qty", 8], [tt("Price"), "price", 11, money2], [tt("Line total"), "lt", 12, money2]]);
     for (const o of m.rows) {
       const co = company(o.companyId || "reboot");
       const ls = o.lines || Object.entries(o.qty).map(([k, n]) => { const p = co.byId.get(k); return p ? { code: p.code || "", name: p.name + (p.size ? " " + p.size : ""), qty: n, price: p.price } : null; }).filter(Boolean);
-      orders.addRow({ date: o.date, co: co.name, store: o.storeName, no: /^\d+$/.test(o.storeNo || "") ? Number(o.storeNo) : o.storeNo, po: o.po, contact: o.contact, lines: ls.length, total: o.total, under: m.under(o) ? "Yes" : "No" });
+      orders.addRow({ date: o.date, co: co.name, store: o.storeName, no: /^\d+$/.test(o.storeNo || "") ? Number(o.storeNo) : o.storeNo, po: o.po, contact: o.contact, lines: ls.length, total: o.total, under: m.under(o) ? tt("Yes") : tt("No") });
       for (const l of ls) lines.addRow({ date: o.date, co: co.name, store: o.storeName, code: l.code || "", name: l.name + (l.size && !String(l.name).includes(l.size) ? " " + l.size : ""), qty: l.qty, price: l.price, lt: cents(l.qty * l.price) });
     }
-    orders.addRow({}); const tr = orders.addRow({ store: `${m.count} orders, ${m.stores} stores. Rep: ${S.rep}`, total: m.total, under: m.underCount + " under" }); tr.font = { bold: true };
+    orders.addRow({}); const tr = orders.addRow({ store: T`${m.count} orders, ${m.stores} stores. Rep: ${S.rep}`, total: m.total, under: T`${m.underCount} under` }); tr.font = { bold: true };
     for (const x of m.byCo) orders.addRow({ co: x.name, store: `${x.count} order${x.count === 1 ? "" : "s"}`, total: x.total });
-    const how = await deliver(new Blob([await wb.xlsx.writeBuffer()], { type: XLSX_TYPE }), `Monthly orders ${ym}.xlsx`); if (how === "again") toast("The file is ready. Tap the button once more.");
-  } catch (e) { toast("The monthly Excel could not be created. Try again.", true); }
+    const how = await deliver(new Blob([await wb.xlsx.writeBuffer()], { type: XLSX_TYPE }), T`Monthly orders ${ym}.xlsx`); if (how === "again") toast(tt("The file is ready. Tap the button once more."));
+  } catch (e) { toast(tt("The monthly Excel could not be created. Try again."), true); }
 });
 $("#weekXlsx").addEventListener("click", async () => {
   try {
     const w = await weekData($("#weekPick").value);
-    if (!w.rows.length) return toast("No day saved in that week.");
-    const blob = await sheetBlob("Mileage", [{ h: "Date", k: "date", w: 12 }, { h: "Weekday", k: "wd", w: 12 }, { h: "Kilometres", k: "km", w: 12, fmt: "0.0" }, { h: "Stores", k: "stores", w: 90 }],
-      w.rows.map(r => ({ date: r.date, wd: weekday(r.date), km: r.km, stores: r.stores.join(", ") })), [{ values: { date: "Total", km: w.total }, bold: true }]);
-    const how = await deliver(blob, `Mileage ${w.mon}.xlsx`); if (how === "again") toast("The file is ready. Tap the button once more.");
-  } catch (e) { toast("The mileage Excel could not be created. Try again.", true); }
+    if (!w.rows.length) return toast(tt("No day saved in that week."));
+    const blob = await sheetBlob(tt("Mileage"), [{ h: tt("Date"), k: "date", w: 12 }, { h: tt("Weekday"), k: "wd", w: 12 }, { h: tt("Kilometres"), k: "km", w: 12, fmt: "0.0" }, { h: tt("Stores"), k: "stores", w: 90 }],
+      w.rows.map(r => ({ date: r.date, wd: weekday(r.date), km: r.km, stores: r.stores.join(", ") })), [{ values: { date: tt("Total"), km: w.total }, bold: true }]);
+    const how = await deliver(blob, T`Mileage ${w.mon}.xlsx`); if (how === "again") toast(tt("The file is ready. Tap the button once more."));
+  } catch (e) { toast(tt("The mileage Excel could not be created. Try again."), true); }
 });
 
 /* ---------- backup, rep, new store ---------- */
@@ -1397,9 +1419,9 @@ $("#backupBtn").addEventListener("click", async () => {
   try {
     const ls = {}; for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k.startsWith("fr.")) ls[k] = localStorage.getItem(k); }
     const data = { app: "field-routes", made: new Date().toISOString(), ls, notes: await all("notes"), orders: await all("orders"), mileage: await all("mileage") };
-    const how = await deliver(new Blob([JSON.stringify(data)], { type: "application/json" }), `La Run backup ${today()}.json`);
-    if (how === "again") toast("The file is ready. Tap the button once more.");
-  } catch (e) { toast("The backup could not be created.", true); }
+    const how = await deliver(new Blob([JSON.stringify(data)], { type: "application/json" }), T`La Run backup ${today()}.json`);
+    if (how === "again") toast(tt("The file is ready. Tap the button once more."));
+  } catch (e) { toast(tt("The backup could not be created."), true); }
 });
 $("#restoreFile").addEventListener("change", async e => {
   const f = e.target.files[0]; e.target.value = ""; if (!f) return;
@@ -1407,61 +1429,65 @@ $("#restoreFile").addEventListener("change", async e => {
     const d = JSON.parse(await f.text()); if (d.app !== "field-routes") throw new Error("not a backup");
     for (const st of ["notes", "orders", "mileage"]) { await tx(st, "readwrite", s => s.clear()); for (const r of d[st] || []) await put(st, r); }
     Object.entries(d.ls || {}).forEach(([k, v]) => localStorage.setItem(k, v));
-    toast("Backup restored. Reloading…"); setTimeout(() => location.reload(), 900);
-  } catch (x) { toast("That file is not a La Run backup.", true); }
+    toast(tt("Backup restored. Reloading…")); setTimeout(() => location.reload(), 900);
+  } catch (x) { toast(tt("That file is not a La Run backup."), true); }
 });
-$("#replaceBtn").addEventListener("click", () => { geoStop = true; setTimeout(() => { S.geo = {}; LS.set("geo", S.geo); geoRunning = false; refreshMarkers(); renderStores(); geocodeAll(); toast("Placing every address again. Keep the app open."); }, 1300); });
-function paintRep() { $("#repBtn").textContent = S.rep || "Set rep name"; }
+$("#replaceBtn").addEventListener("click", () => { geoStop = true; setTimeout(() => { S.geo = {}; LS.set("geo", S.geo); geoRunning = false; refreshMarkers(); renderStores(); geocodeAll(); toast(tt("Placing every address again. Keep the app open.")); }, 1300); });
+function paintRep() { $("#repBtn").textContent = S.rep || tt("Set rep name"); }
 $("#repBtn").addEventListener("click", () => {
-  openSheet("Rep", `<div class="card"><div class="field"><label for="rName">Your name, as printed on orders</label><input id="rName" type="text" value="${esc(S.rep)}"></div>
-    <p class="hint">Notes, orders and kilometres are filed under this name. Another name on this phone sees its own.</p></div>`,
-    `<button class="btn primary" id="rSave" type="button">Save</button>`);
+  openSheet(tt("Rep"), `<div class="card"><div class="field"><label for="rName">${tt("Your name, as printed on orders")}</label><input id="rName" type="text" value="${esc(S.rep)}"></div>
+    <p class="hint">${tt("Notes, orders and kilometres are filed under this name. Another name on this phone sees its own.")}</p></div>`,
+    `<button class="btn primary" id="rSave" type="button">${tt("Save")}</button>`);
   $("#sheetFoot").onclick = async e => {
-    if (e.target.id !== "rSave") return; const v = $("#rName").value.trim(); if (!v) return toast("Type a name first.", true);
+    if (e.target.id !== "rSave") return; const v = $("#rName").value.trim(); if (!v) return toast(tt("Type a name first."), true);
     S.rep = v; LS.set("rep", v); paintRep(); await refreshDone(); closeSheet(); if (S.tab === "more") renderReports();
   };
 });
 $("#addStoreBtn").addEventListener("click", () => {
   const regs = [...new Set([...byId.values()].map(regionOf).filter(Boolean))].sort((a, b) => a.localeCompare(b, "fr"));
   const fld = (id, label, extra) => `<div class="field"><label for="${id}">${label}</label><input id="${id}" type="text" ${extra || ""}></div>`;
-  openSheet("New store", `<div class="card">${fld("aName", "Store name")}${fld("aAddr", "Street address")}<div class="grid2">${fld("aCity", "City")}${fld("aPostal", "Postal code")}</div>
-    <div class="grid2">${fld("aPhone", "Phone", 'inputmode="tel"')}${fld("aNo", "Store number", 'inputmode="numeric"')}</div>
-    <div class="field"><label for="aReg">Region</label><select id="aReg"><option value="">Choose</option>${regs.map(r => `<option>${esc(r)}</option>`).join("")}</select></div>
-    <p class="hint">Added to the list "${esc(curList().name)}" on this phone.</p></div>`, `<button class="btn primary" id="aSave" type="button">Add store</button>`);
+  openSheet(tt("New store"), `<div class="card">${fld("aName", tt("Store name"))}${fld("aAddr", tt("Street address"))}<div class="grid2">${fld("aCity", tt("City"))}${fld("aPostal", tt("Postal code"))}</div>
+    <div class="grid2">${fld("aPhone", tt("Phone"), 'inputmode="tel"')}${fld("aNo", tt("Store number"), 'inputmode="numeric"')}</div>
+    <div class="field"><label for="aReg">${tt("Region")}</label><select id="aReg"><option value="">${tt("Choose")}</option>${regs.map(r => `<option>${esc(r)}</option>`).join("")}</select></div>
+    <p class="hint">${T`Added to the list "${esc(curList().name)}" on this phone.`}</p></div>`, `<button class="btn primary" id="aSave" type="button">${tt("Add store")}</button>`);
   $("#sheetFoot").onclick = e => {
     if (e.target.id !== "aSave") return; const v = k => $("#" + k).value.trim();
-    if (!v("aName")) return toast("The store needs a name.", true);
+    if (!v("aName")) return toast(tt("The store needs a name."), true);
     const s = { id: "new-" + Date.now(), listId: S.listId, name: v("aName"), address: v("aAddr"), city: v("aCity"), postal: v("aPostal"), phone: v("aPhone"), region: v("aReg"), storeNo: v("aNo"), contact: "", email: "" };
     LS.set("custom", LS.get("custom", []).concat(s)); curList().stores.push(s); byId.set(s.id, s);
-    closeSheet(); renderFilters(); renderStores(); geocodeAll(); toast("Store added.");
+    closeSheet(); renderFilters(); renderStores(); geocodeAll(); toast(tt("Store added."));
   };
 });
 
 /* ---------- GoHighLevel settings ---------- */
-function paintApi() { $("#appVersion").textContent = "La Run version 14"; $("#crmTitle").textContent = CRM; $("#apiUrl").value = API.url(); $("#apiKey").value = API.key(); paintSync(); }
+function paintApi() { $("#appVersion").textContent = "La Run version 16"; $("#crmTitle").textContent = CRM; $("#apiUrl").value = API.url(); $("#apiKey").value = API.key(); paintSync(); }
 $("#ghlConnect").addEventListener("click", async e => {
   const url = $("#apiUrl").value.trim().replace(/\/+$/, ""), key = $("#apiKey").value.trim();
-  if (!/^https:\/\//.test(url)) return toast("The service address must start with https://", true);
-  if (!key) return toast("Type the app password you set in Render.", true);
+  if (!/^https:\/\//.test(url)) return toast(tt("The service address must start with https://"), true);
+  if (!key) return toast(tt("Type the app password you set in Render."), true);
   LS.set("apiUrl", url); LS.set("apiKey", key);
-  const b = e.target; b.disabled = true; b.textContent = "Testing… (can take a minute)";
+  const b = e.target; b.disabled = true; b.textContent = tt("Testing… (can take a minute)");
   try {
     const r = await api("GET", "/api/check");
     const probs = Object.entries(r).filter(([k, v]) => !/^(ok|set)/.test(String(v)));
     if (probs.length) toast(probs.map(([k, v]) => `${k}: ${v}`).join(" · "), true);
-    else { toast(`Connected to ${CRM}.`); syncSoon(); }
+    else { toast(T`Connected to ${CRM}.`); syncSoon(); }
   } catch (x) { toast(x.message, true); }
-  finally { b.disabled = false; b.textContent = "Connect and test"; paintSync(); }
+  finally { b.disabled = false; b.textContent = tt("Connect and test"); paintSync(); }
 });
 $("#ghlSync").addEventListener("click", () => syncAll(true));
+document.querySelectorAll("#langSeg [data-lang]").forEach(b => {
+  b.classList.toggle("on", b.dataset.lang === LANG); b.setAttribute("aria-pressed", b.dataset.lang === LANG);
+  b.addEventListener("click", () => { if (b.dataset.lang === LANG) return; LS.set("lang", b.dataset.lang); location.reload(); });
+});
 
 /* ---------- start ---------- */
 document.querySelector(".tabs").addEventListener("click", e => { const b = e.target.closest("[data-tab]"); if (b) setTab(b.dataset.tab); });
 window.addEventListener("resize", () => map && map.invalidateSize());
 (async function start() {
-  paintRep(); renderFilters(); initMap(); setTab("stores");
+  translatePage(); paintRep(); renderFilters(); initMap(); setTab("stores");
   try { await db(); await refreshDone(); }
-  catch (e) { const b = $("#banner"); b.hidden = false; b.textContent = "This browser is blocking saved data (private browsing?). Notes, orders and kilometres will not be kept."; }
+  catch (e) { const b = $("#banner"); b.hidden = false; b.textContent = tt("This browser is blocking saved data (private browsing?). Notes, orders and kilometres will not be kept."); }
   renderStores(); refreshMarkers(true);
   if (infoOk()) measureSoon();
   geocodeAll();
@@ -1469,5 +1495,5 @@ window.addEventListener("resize", () => map && map.invalidateSize());
   if (connected()) { fetch(API.url() + "/health").catch(() => {}); syncSoon(); prefetchRoute(6000); setTimeout(() => fetchDue().catch(() => {}), 2500); }
   if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
 })();
-window.__fr = { S, solveLoop, syncAll, G };   // for support and testing
+window.__fr = { S, solveLoop, syncAll, G, missingFr, LANG };   // for support and testing
 })();
