@@ -13,7 +13,7 @@
 <link rel="apple-touch-icon" href="icon-180.png">
 <link rel="icon" href="icon-192.png">
 <link rel="stylesheet" href="leaflet.css">
-<link rel="stylesheet" href="styles.css?v=12">
+<link rel="stylesheet" href="styles.css?v=13">
 </head>
 <body>
 <header class="topbar">
@@ -155,12 +155,19 @@
 
 <div id="toast" class="toast" hidden></div>
 
+<div id="scanner" class="scanner" hidden>
+  <video id="scanVideo" playsinline muted autoplay></video>
+  <div id="scanBand" class="scan-band"></div>
+  <div class="scan-top"><div><div id="scanTitle">Scan</div><div id="scanCount" class="scan-count"></div></div>
+    <div class="row"><button id="scanTorch" class="btn small" type="button" hidden>Light</button><button id="scanDone" class="btn small primary" type="button">Done</button></div></div>
+  <div id="scanCard" class="scan-card"></div>
+</div>
 <script src="leaflet.js"></script>
 <script src="jszip.min.js"></script>
 <script src="exceljs.min.js"></script>
-<script src="config.js?v=12"></script>
-<script src="stores.js?v=12"></script>
-<script src="template.js?v=12"></script>
-<script src="app.js?v=12"></script>
+<script src="config.js?v=13"></script>
+<script src="stores.js?v=13"></script>
+<script src="template.js?v=13"></script>
+<script src="app.js?v=13"></script>
 </body>
 </html>

@@ -1043,6 +1043,121 @@ function pickCompany(id) {
     ${COMPANIES.map(co => `<button class="btn ${co.id === last ? "primary" : ""} big-pick" type="button" data-co="${esc(co.id)}">${esc(co.name)}</button>`).join("")}`);
   $("#sheetContent").onclick = e => { const b = e.target.closest("[data-co]"); if (b) openOrder(id, b.dataset.co); };
 }
+/* ---------- barcode scanner: camera on the order screen, matched to the catalog's UPC column ---------- */
+const upcKey = d => String(d || "").replace(/\D/g, "").replace(/^0+/, "");
+function upcE2A(e) {   // UPC-E (8 digits) to UPC-A (12 digits)
+  const ns = e[0], d = e.slice(1, 7), c = e[7], l = d[5];
+  const m = l <= "2" ? d.slice(0, 2) + l + "0000" + d.slice(2, 5) : l === "3" ? d.slice(0, 3) + "00000" + d.slice(3, 5) : l === "4" ? d.slice(0, 4) + "00000" + d[4] : d.slice(0, 5) + "0000" + l;
+  return ns + m + c;
+}
+function upcIndex(co) {
+  if (co._upc) return co._upc;
+  const exact = new Map(), body = new Map(), add = (m, k, p) => { if (!m.has(k)) m.set(k, []); m.get(k).push(p); };
+  for (const p of co.products) {
+    const k = upcKey(p.upc); if (k.length < 6) continue;
+    add(exact, k, p);
+    if (k.length >= 11) add(body, k.length === 11 ? k : k.slice(0, -1), p);   // without the check digit: catches typos and missing digits in the catalog
+  }
+  return (co._upc = { exact, body });
+}
+function findByBarcode(co, raw, fmt) {
+  let d = String(raw || "").replace(/\D/g, "");
+  if (d.length === 8 && /upc_?e/i.test(String(fmt || ""))) d = upcE2A(d);
+  const { exact, body } = upcIndex(co), k = upcKey(d);
+  let hit = exact.get(k), viaCase = false;
+  if (!hit && k.length >= 12) hit = body.get(k.slice(0, -1));
+  if (!hit && d.length === 14) { hit = body.get(upcKey(d.slice(1, 13))) || exact.get(upcKey(d.slice(1, 13))); viaCase = !!hit; }   // case code (GTIN-14): the item inside
+  const seen = new Set();
+  return { list: (hit || []).filter(p => !seen.has(p.id) && seen.add(p.id)), viaCase, digits: d };
+}
+const SC = { stream: null, timer: null, last: "", lastAt: 0, audio: null, decode: null, busy: false };
+function loadZXing() {
+  if (window.ZXingLite) return Promise.resolve();
+  return new Promise((res, rej) => { const el = document.createElement("script"); el.src = "zxing.min.js?v=13"; el.onload = res; el.onerror = () => rej(new Error("load")); document.head.appendChild(el); });
+}
+function beep(ok) {
+  try {
+    const a = SC.audio; if (!a) return;
+    const o = a.createOscillator(), g = a.createGain(); o.frequency.value = ok ? 1250 : 330; g.gain.value = 0.12;
+    o.connect(g); g.connect(a.destination); o.start(); o.stop(a.currentTime + (ok ? 0.09 : 0.25));
+  } catch (e) { /* no sound */ }
+  if (navigator.vibrate) navigator.vibrate(ok ? 40 : [60, 50, 60]);
+}
+function makeDecoder() {
+  const cv = document.createElement("canvas"), cx = cv.getContext("2d", { willReadFrequently: true });
+  let native = null;
+  if ("BarcodeDetector" in window) { try { native = new BarcodeDetector({ formats: ["upc_a", "upc_e", "ean_13", "ean_8", "itf", "code_128"] }); } catch (e) { native = null; } }
+  return async video => {
+    const vw = video.videoWidth, vh = video.videoHeight; if (!vw || !vh) return null;
+    const sy = Math.round(vh * 0.3), sh = Math.round(vh * 0.4), w = Math.min(vw, 1000), h = Math.round(sh * w / vw);   // the middle band, where the frame is drawn
+    cv.width = w; cv.height = h; cx.drawImage(video, 0, sy, vw, sh, 0, 0, w, h);
+    if (native) { try { const r = await native.detect(cv); if (r[0]) return { text: r[0].rawValue, fmt: r[0].format }; return null; } catch (e) { native = null; } }
+    const Z = window.ZXingLite, px = cx.getImageData(0, 0, w, h).data, lum = new Uint8ClampedArray(w * h);
+    for (let i = 0, j = 0; i < lum.length; i++, j += 4) lum[i] = (px[j] * 77 + px[j + 1] * 150 + px[j + 2] * 29) >> 8;
+    const hints = new Map([[Z.DecodeHintType.TRY_HARDER, true]]), bmp = new Z.BinaryBitmap(new Z.HybridBinarizer(new Z.RGBLuminanceSource(lum, w, h)));
+    for (const R of [Z.UPCEANReader, Z.ITFReader, Z.Code128Reader]) {
+      try { const r = new R(hints).decode(bmp, hints); const f = r.getBarcodeFormat(); return { text: r.getText(), fmt: Object.keys(Z.BarcodeFormat).find(k => Z.BarcodeFormat[k] === f) || "" }; } catch (e) { /* not this kind */ }
+    }
+    return null;
+  };
+}
+function stopScanner() {
+  clearTimeout(SC.timer); SC.timer = null;
+  if (SC.stream) { SC.stream.getTracks().forEach(t => t.stop()); SC.stream = null; }
+  const v = $("#scanVideo"); if (v) v.srcObject = null;
+  $("#scanner").hidden = true; document.body.classList.remove("scanning");
+}
+// onCode(text, format) returns { ok, html } for the card at the bottom; onCard handles taps in that card.
+async function openScanner(title, onCode, onCard, onClose) {
+  try { SC.audio = SC.audio || new (window.AudioContext || window.webkitAudioContext)(); SC.audio.resume(); } catch (e) { SC.audio = null; }
+  const box = $("#scanner"), card = $("#scanCard"), band = $("#scanBand");
+  $("#scanTitle").textContent = title; card.innerHTML = `<p class="hint">Starting the camera…</p>`;
+  box.hidden = false; document.body.classList.add("scanning");
+  let count = 0;
+  const done = () => { stopScanner(); onClose(count); };
+  $("#scanDone").onclick = done;
+  card.onclick = e => { const r = onCard(e); if (r) { card.innerHTML = r.html; if (r.added) { count++; $("#scanCount").textContent = `${count} added`; } } };
+  if (!window.isSecureContext || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    card.innerHTML = `<b>The camera is not available here.</b><p class="hint">Open La Run from its usual https address, or type the barcode digits in the search box.</p>`; return;
+  }
+  try {
+    await loadZXing();
+    SC.stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } } });
+  } catch (e) {
+    const why = e && e.name === "NotAllowedError" ? "Camera access is blocked for La Run. On iPhone: Settings > Safari > Camera > Allow, then reopen the app."
+      : e && e.name === "NotFoundError" ? "No camera was found on this device." : e && e.message === "load" ? "The scanner could not load. Reopen the app once with signal so it is saved for offline use." : "The camera could not start.";
+    card.innerHTML = `<b>${esc(why)}</b><p class="hint">You can type the barcode digits in the search box instead.</p>`; return;
+  }
+  if (box.hidden) return stopScanner();   // closed while the camera was starting
+  const v = $("#scanVideo"); v.srcObject = SC.stream; v.setAttribute("playsinline", ""); v.muted = true;
+  try { await v.play(); } catch (e) { /* iOS starts it on its own */ }
+  const track = SC.stream.getVideoTracks()[0], caps = track && track.getCapabilities ? track.getCapabilities() : {};
+  const tb = $("#scanTorch"); tb.hidden = !caps.torch; let torch = false;
+  tb.onclick = () => { torch = !torch; track.applyConstraints({ advanced: [{ torch }] }).catch(() => {}); tb.classList.toggle("on", torch); };
+  $("#scanCount").textContent = "";
+  card.innerHTML = `<p class="hint">Hold the barcode inside the frame. Each scan adds one; use + and − to adjust.</p>`;
+  SC.decode = makeDecoder();
+  const tick = async () => {
+    if (!SC.stream || SC.busy) return;
+    SC.busy = true; let r = null;
+    try { r = await SC.decode(v); } catch (e) { r = null; }
+    SC.busy = false;
+    if (!SC.stream) return;
+    if (r && r.text) {
+      const now = Date.now();
+      if (r.text !== SC.last || now - SC.lastAt > 2500) {    // the same barcode held in view counts once
+        SC.last = r.text; SC.lastAt = now;
+        const out = onCode(r.text, r.fmt); card.innerHTML = out.html; beep(out.ok);
+        if (out.added) { count++; $("#scanCount").textContent = `${count} added`; }
+        band.className = "scan-band " + (out.ok ? "hit" : "miss"); setTimeout(() => { band.className = "scan-band"; }, 600);
+      } else SC.lastAt = now;
+    }
+    SC.timer = setTimeout(tick, 120);
+  };
+  tick();
+}
+document.addEventListener("visibilitychange", () => { if (document.hidden && SC.stream) $("#scanDone").click(); });
+
 async function openOrder(id, coId) {
   if (!coId) { if (COMPANIES.length > 1) return pickCompany(id); coId = COMPANIES[0].id; }
   const co = company(coId), s = byId.get(id), m = S.meta[id] || {};
@@ -1068,6 +1183,7 @@ async function openOrder(id, coId) {
       <input type="number" inputmode="numeric" min="0" max="999" step="1" value="${qty[p.id] || 0}" aria-label="Quantity ${esc(p.name)}">
       <button type="button" data-d="1" aria-label="One more ${esc(p.name)}">+</button></div></div>`;
   };
+  const hasUpc = catalog && co.products.some(p => upcKey(p.upc).length >= 8);
   const brands = catalog ? [...new Set(co.products.map(p => p.group))].sort((a, b) => a.localeCompare(b, "fr")) : [];
   const fixedList = () => [...new Set(co.products.map(p => p.group))].map(g => `<div class="grp">${esc(g)}, by the ${co.products.find(p => p.group === g).by}</div>` + co.products.filter(p => p.group === g).map(prodRow).join("")).join("");
   openSheet(`${co.name} · ${s.name}`, `
@@ -1079,7 +1195,8 @@ async function openOrder(id, coId) {
       ${field(f.phone, "oPhone", "Store phone", head.phone, 'inputmode="tel"')}${field(f.email, "oEmail", "Store email", head.email, 'inputmode="email"')}
       ${field(f.rep, "oRep", "Rep", head.rep)}</div></details>
     ${catalog ? `<div class="cat-tools">
-      <input id="cSearch" type="search" placeholder="Product, code, brand or barcode" autocomplete="off" aria-label="Search the catalog">
+      <div class="row"><input id="cSearch" type="search" placeholder="Product, code, brand or barcode" autocomplete="off" aria-label="Search the catalog">
+      ${hasUpc ? `<button class="btn small scan-btn" id="cScan" type="button" aria-label="Scan a barcode">Scan</button>` : ""}</div>
       <select id="cBrand" aria-label="Brand"><option value="">All brands</option>${brands.map(b => `<option value="${esc(b)}">${esc(b)}</option>`).join("")}</select>
       <div class="row gap"><button class="btn small" id="cMine" type="button"></button><button class="btn small" id="cLast" type="button">Last order</button></div></div>
       <div id="cList"></div>` : `<button class="btn small" id="cLast" type="button">Last order</button>` + fixedList()}`,
@@ -1128,6 +1245,7 @@ async function openOrder(id, coId) {
     const b = e.target.closest("[data-d]");
     if (b) { const pid = b.closest(".prod").dataset.p; return setQty(pid, (qty[pid] || 0) + +b.dataset.d); }
     if (e.target.id === "cMine") { view = view === "order" ? "browse" : "order"; return renderCat(); }
+    if (e.target.id === "cScan") return scan();
     if (e.target.id === "cLast") {
       // Newest order for this company, from this phone or from the CRM (laptop, teammates).
       const local = await storeOrders(id).catch(() => []);
@@ -1178,6 +1296,26 @@ async function openOrder(id, coId) {
       toast("The Excel order could not be created. Close the order, reopen it and try again.", true);
     } finally { btn.disabled = false; paint(); }
   };
+  // Scanning: each barcode adds one of that product; the card lets the rep set the quantity without leaving the camera.
+  const scanCard = (p, note) => {
+    const sub = `${esc(p.group)} · ${esc(p.code)} · ${money(p.price)}${p.srp ? ` · PDSF ${money(p.srp)}` : ""}`;
+    return `${note ? `<div class="scan-note">${note}</div>` : ""}<div class="scan-prod"><div class="pt"><div class="pn">${esc(p.name)}</div><div class="pp">${sub}</div></div>
+      <div class="step" data-sp="${esc(p.id)}"><button type="button" data-sd="-1" aria-label="One less">−</button><span class="sq">${qty[p.id] || 0}</span><button type="button" data-sd="1" aria-label="One more">+</button></div></div>
+      <div class="hint">${money(orderTotal(qty, co))} in this order</div>`;
+  };
+  const scan = () => openScanner(`Scan · ${co.name}`, (text, fmt) => {
+    const m = findByBarcode(co, text, fmt);
+    if (!m.list.length) return { ok: false, html: `<b>Not in the ${esc(co.name)} catalog</b><p class="hint">Barcode ${esc(m.digits || text)}. Try searching it by name.</p>` };
+    if (m.list.length > 1) return { ok: true, html: `<b>This barcode is on ${m.list.length} products. Pick one:</b>` + m.list.map(p => `<button class="btn small pick-p" type="button" data-pick="${esc(p.id)}">${esc(p.name)} · ${esc(p.code)}</button>`).join("") };
+    const p = m.list[0]; setQty(p.id, (qty[p.id] || 0) + 1);
+    return { ok: true, added: true, html: scanCard(p, m.viaCase ? "Case barcode: one unit added. Adjust below." : "") };
+  }, e => {
+    const pk = e.target.closest("[data-pick]");
+    if (pk) { const p = co.byId.get(pk.dataset.pick); setQty(p.id, (qty[p.id] || 0) + 1); beep(true); return { added: true, html: scanCard(p) }; }
+    const b = e.target.closest("[data-sd]"); if (!b) return null;
+    const p = co.byId.get(b.closest("[data-sp]").dataset.sp); setQty(p.id, (qty[p.id] || 0) + Number(b.dataset.sd));
+    return { html: scanCard(p) };
+  }, count => { view = "order"; renderCat(); paint(); prebuild(); if (count) toast(`${count} product${count === 1 ? "" : "s"} added by scanning.`); });
   renderCat(); paint(); prebuild();
 }
 
@@ -1296,7 +1434,7 @@ $("#addStoreBtn").addEventListener("click", () => {
 });
 
 /* ---------- GoHighLevel settings ---------- */
-function paintApi() { $("#appVersion").textContent = "La Run version 12"; $("#crmTitle").textContent = CRM; $("#apiUrl").value = API.url(); $("#apiKey").value = API.key(); paintSync(); }
+function paintApi() { $("#appVersion").textContent = "La Run version 13"; $("#crmTitle").textContent = CRM; $("#apiUrl").value = API.url(); $("#apiKey").value = API.key(); paintSync(); }
 $("#ghlConnect").addEventListener("click", async e => {
   const url = $("#apiUrl").value.trim().replace(/\/+$/, ""), key = $("#apiKey").value.trim();
   if (!/^https:\/\//.test(url)) return toast("The service address must start with https://", true);
