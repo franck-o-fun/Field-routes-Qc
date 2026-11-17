@@ -13,7 +13,7 @@
 <link rel="apple-touch-icon" href="icon-180.png">
 <link rel="icon" href="icon-192.png">
 <link rel="stylesheet" href="leaflet.css">
-<link rel="stylesheet" href="styles.css?v=11">
+<link rel="stylesheet" href="styles.css?v=12">
 </head>
 <body>
 <header class="topbar">
@@ -32,6 +32,7 @@
         <select id="regionSel" aria-label="Region"></select>
       </div>
       <input id="search" type="search" placeholder="Search a store, city or number" autocomplete="off" aria-label="Search stores">
+      <div class="seg dueSeg" role="group" aria-label="Show stores"><button type="button" data-due="all">All</button><button type="button" data-due="due">Due</button><button type="button" data-due="reorder">Reorder</button></div>
       <div class="row between">
         <label class="check"><input id="hideDone" type="checkbox"> Hide completed</label>
         <button id="addShown" class="btn small" type="button">Add shown to route</button>
@@ -47,6 +48,11 @@
   <!-- MAP -->
   <section id="view-map" class="view">
     <div id="map"></div>
+    <div class="map-tools">
+      <div class="seg dueSeg" role="group" aria-label="Show stores"><button type="button" data-due="all">All</button><button type="button" data-due="due">Due</button><button type="button" data-due="reorder">Reorder</button></div>
+      <button id="planDue" class="btn small primary" type="button">Plan a run from due stores</button>
+      <div class="legend"><span><i class="st-red"></i>Reorder due</span><span><i class="st-amber"></i>Visit due</span><span><i class="st-ok"></i>Up to date</span><span><i class="st-new"></i>No history</span></div>
+    </div>
     <div id="geoStatus" class="geo-status" hidden></div>
   </section>
 
@@ -152,9 +158,9 @@
 <script src="leaflet.js"></script>
 <script src="jszip.min.js"></script>
 <script src="exceljs.min.js"></script>
-<script src="config.js?v=11"></script>
-<script src="stores.js?v=11"></script>
-<script src="template.js?v=11"></script>
-<script src="app.js?v=11"></script>
+<script src="config.js?v=12"></script>
+<script src="stores.js?v=12"></script>
+<script src="template.js?v=12"></script>
+<script src="app.js?v=12"></script>
 </body>
 </html>

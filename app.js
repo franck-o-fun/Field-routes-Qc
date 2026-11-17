@@ -83,6 +83,8 @@ const S = {
   drafts: LS.get("drafts", {}),
   done: new Set(),
   lastLocal: {},   // storeId -> { visit, order }: latest dates saved on this phone
+  due: LS.get("due", null),           // last visit and last order for every store, from the CRM
+  dueFilter: LS.get("dueFilter", "all"),
   line: null
 };
 if (!lists.some(l => l.id === S.listId)) S.listId = lists[0].id;
@@ -100,6 +102,7 @@ function setTab(tab) {
   S.tab = tab; document.body.dataset.tab = tab;
   document.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === tab));
   if (tab === "route") renderRoute();
+  if (tab === "map" || tab === "stores") fetchDue().catch(() => {});
   if (tab === "more") renderReports();
   setTimeout(() => map && map.invalidateSize(), 60);
 }
@@ -121,10 +124,11 @@ function closeSheet(silent) {
 $("#sheet").addEventListener("click", e => { if (e.target.closest("[data-close]")) closeSheet(); });
 
 /* ---------- stores list ---------- */
-function shownStores() {
+function shownStores(anyStatus) {
   const q = S.q.trim().toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
   return curList().stores.filter(s => {
     if (S.region && regionOf(s) !== S.region) return false;
+    if (!anyStatus && S.dueFilter !== "all") { const c = statusFor(s.id).cls; if (S.dueFilter === "reorder" ? c !== "red" : c !== "red" && c !== "amber") return false; }
     if (S.hideDone && S.done.has(s.id)) return false;
     if (!q) return true;
     const hay = [s.name, s.city, s.address, s.storeNo, s.postal].join(" ").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
@@ -140,7 +144,19 @@ function renderFilters() {
   $("#regionSel").value = S.region;
   $("#hideDone").checked = S.hideDone;
 }
+function paintDueSeg() {
+  let red = 0, amber = 0;
+  for (const s of shownStores(true)) { const c = statusFor(s.id).cls; if (c === "red") red++; else if (c === "amber") amber++; }
+  const lab = { all: "All", due: `Due · ${red + amber}`, reorder: `Reorder · ${red}` };
+  document.querySelectorAll(".dueSeg").forEach(g => g.querySelectorAll("button[data-due]").forEach(b => {
+    b.textContent = lab[b.dataset.due]; b.classList.toggle("on", b.dataset.due === S.dueFilter); b.setAttribute("aria-pressed", b.dataset.due === S.dueFilter);
+  }));
+  const pb = $("#planDue"); if (pb) pb.textContent = `Plan a run from due stores (${red + amber})`;
+}
+function setDueFilter(v) { S.dueFilter = v; LS.set("dueFilter", v); renderStores(); refreshMarkers(true); }
+document.addEventListener("click", e => { const b = e.target.closest(".dueSeg button[data-due]"); if (b) setDueFilter(b.dataset.due); });
 function renderCount() {
+  paintDueSeg();
   const n = shownStores().length;
   $("#count").textContent = `${n} store${n === 1 ? "" : "s"} shown · ${S.route.length} on today's route` + (G.pending ? ` · ${G.pending} to sync` : "");
 }
@@ -150,17 +166,17 @@ function renderStores() {
   $("#storeList").innerHTML = shown.length ? shown.map(s => {
     const inR = S.route.includes(s.id), g = S.geo[s.id];
     const st = S.done.has(s.id) ? null : statusFor(s.id);
+    const due = st && st.cls === "red" ? ` <span class="tag due-red">Reorder due</span>` : st && st.cls === "amber" ? ` <span class="tag due-amber">Visit due</span>` : "";
     const tags = (S.done.has(s.id) ? `<span class="tag done">Done today</span>` : "") +
-      (st && st.cls === "red" ? `<span class="tag due-red">Reorder due</span>` : st && st.cls === "amber" ? `<span class="tag due-amber">Visit due</span>` : "") +
       (!s.address ? `<span class="tag nomap">No address</span>` : g && g.approx ? `<span class="tag">Approx. pin</span>` : "");
     return `<li class="${inR ? "in" : ""}">
       <button class="pick" type="button" data-id="${esc(s.id)}" aria-pressed="${inR}">
         <span class="tick">${inR ? "✓" : ""}</span>
-        <span style="min-width:0"><span class="s-name">${esc(s.name)}${s.storeNo ? ` <span class="tag">#${esc(s.storeNo)}</span>` : ""}</span>
+        <span style="min-width:0"><span class="s-name">${esc(s.name)}${s.storeNo ? ` <span class="tag">#${esc(s.storeNo)}</span>` : ""}${due}</span>
         <span class="s-sub">${esc([s.address, s.city].filter(Boolean).join(", ") || "No address")}${tags}</span></span>
       </button>
       <button class="open" type="button" data-open="${esc(s.id)}" aria-label="Open ${esc(s.name)}">›</button></li>`;
-  }).join("") : `<li class="empty" style="display:block">No store matches. Clear the search or pick another region.</li>`;
+  }).join("") : `<li class="empty" style="display:block">No store matches. Clear the search, pick another region or show all stores.</li>`;
   const b = $("#routeBadge"); b.hidden = !S.route.length; b.textContent = S.route.length;
 }
 $("#storeList").addEventListener("click", e => {
@@ -171,6 +187,7 @@ $("#listSel").addEventListener("change", e => { S.listId = e.target.value; LS.se
 $("#regionSel").addEventListener("change", e => { S.region = e.target.value; renderStores(); refreshMarkers(true); });
 $("#search").addEventListener("input", e => { S.q = e.target.value; renderStores(); });
 $("#hideDone").addEventListener("change", e => { S.hideDone = e.target.checked; LS.set("hideDone", S.hideDone); renderStores(); });
+$("#planDue").addEventListener("click", planDueRun);
 $("#addShown").addEventListener("click", () => {
   const add = shownStores().filter(s => !S.route.includes(s.id));
   if (!add.length) return toast("Every store on screen is already on the route.");
@@ -206,6 +223,7 @@ function initMap() {
 function popupHtml(id) {
   const s = byId.get(id), g = S.geo[id], inR = S.route.includes(id);
   return `<div class="pop"><b>${esc(s.name)}</b><span>${esc([s.address, s.city, s.postal].filter(Boolean).join(", "))}</span>
+    ${S.done.has(id) ? `<small class="pst ok">Done today</small>` : (st => st.cls === "new" ? "" : `<small class="pst ${st.cls}">${esc(st.text)}</small>`)(statusFor(id))}
     ${s.phone ? `<small>${esc(s.phone)}</small>` : ""}${g && g.approx ? `<small>Approximate pin: the address did not match a building.</small>` : ""}
     <div class="acts"><button class="primary" data-act="order" data-id="${esc(id)}">Order</button>
     <button data-act="route" data-id="${esc(id)}">${inR ? "Remove from route" : "Add to route"}</button>
@@ -221,13 +239,13 @@ function refreshMarkers(fit) {
   for (const [id, m] of markers) if (!want.has(id)) { m.remove(); markers.delete(id); }
   const pts = [];
   for (const [id] of want) {
-    const g = S.geo[id], n = S.route.indexOf(id);
+    const g = S.geo[id], n = S.route.indexOf(id), st = S.done.has(id) ? "ok" : statusFor(id).cls;
     const icon = L.divIcon({ className: "", iconSize: n >= 0 ? [30, 30] : [22, 22],
-      html: `<div class="pin${n >= 0 ? " route" : ""}${g.approx ? " approx" : ""}">${n >= 0 ? n + 1 : ""}</div>` });
+      html: `<div class="pin st-${st}${n >= 0 ? " route" : ""}${g.approx ? " approx" : ""}">${n >= 0 ? n + 1 : ""}</div>` });
     let m = markers.get(id);
-    if (!m) { m = L.marker([g.lat, g.lng], { icon }).addTo(map); const p = L.popup({ maxWidth: 300 }); p._frId = id; m.bindPopup(p); markers.set(id, m); }
+    if (!m) { m = L.marker([g.lat, g.lng], { icon }).addTo(map); const p = L.popup({ maxWidth: 300, autoPanPaddingTopLeft: L.point(10, 170), autoPanPaddingBottomRight: L.point(10, 60) }); p._frId = id; m.bindPopup(p); markers.set(id, m); }
     else { m.setIcon(icon); m.setLatLng([g.lat, g.lng]); }
-    m.setZIndexOffset(n >= 0 ? 500 : 0);
+    m.setZIndexOffset(n >= 0 ? 500 : st === "red" ? 300 : st === "amber" ? 200 : 0);
     pts.push([g.lat, g.lng]);
   }
   if (S.start) {
@@ -650,12 +668,50 @@ function remoteItem(co, label) {
   return best ? { key: best.id, name: best.name } : { key: label, name: label };
 }
 function datesFor(id) {
-  const b = BR.cache[id], l = S.lastLocal[id] || {};
+  const b = BR.cache[id], l = S.lastLocal[id] || {}, dl = S.due || {}, d = (dl.stores && dl.stores[id]) || {};
+  const pick = k => b && b[k] != null ? b[k] : dl[k] != null ? dl[k] : null;
   return {
-    visit: maxDate([l.visit, b && b.lastVisit, ...((b && b.visits) || []).map(v => v.date)]),
-    order: maxDate([l.order, b && b.lastOrder, ...((b && b.orders) || []).map(o => o.date)]),
-    reorderDays: b && b.reorderDays != null ? b.reorderDays : 35, followupDays: b && b.followupDays != null ? b.followupDays : 21
+    visit: maxDate([l.visit, d.lastVisit, b && b.lastVisit, ...((b && b.visits) || []).map(v => v.date)]),
+    order: maxDate([l.order, d.lastOrder, b && b.lastOrder, ...((b && b.orders) || []).map(o => o.date)]),
+    reorderDays: pick("reorderDays") != null ? pick("reorderDays") : 35, followupDays: pick("followupDays") != null ? pick("followupDays") : 21
   };
+}
+// Last visit and last order for every store in the CRM, so the map and list show who is due, not only stores opened on this phone.
+let dueBusy = null;
+function fetchDue(force) {
+  if (!connected() || !navigator.onLine) return Promise.resolve(null);
+  if (!force && S.due && Date.now() - S.due.at < 10 * 60e3) return Promise.resolve(S.due);
+  if (dueBusy) return dueBusy;
+  dueBusy = api("GET", "/api/due" + (force ? "?fresh=1" : ""), null, 60000)
+    .then(r => { S.due = Object.assign(r, { at: Date.now() }); LS.set("due", S.due); renderStores(); refreshMarkers(); return S.due; })
+    .finally(() => { dueBusy = null; });
+  return dueBusy;
+}
+// Fill today's route with the most urgent due stores: in the region shown, or nearest the start when no region is picked.
+const kmBetween = (a, b) => { const r = Math.PI / 180, x = (b.lng - a.lng) * r * Math.cos((a.lat + b.lat) * r / 2), y = (b.lat - a.lat) * r; return 6371 * Math.hypot(x, y); };
+function planDueRun() {
+  const size = C.dueRunSize || 8;
+  const urgency = id => { const d = datesFor(id), t = today(), st = statusFor(id);
+    return st.cls === "red" ? 10000 + daysBetween(d.order, t) - d.reorderDays : daysBetween(maxDate([d.visit, d.order]), t) - d.followupDays; };
+  let cand = shownStores(true).filter(s => !S.route.includes(s.id) && !S.done.has(s.id) && S.geo[s.id] && S.geo[s.id].lat && ["red", "amber"].includes(statusFor(s.id).cls));
+  if (S.dueFilter === "reorder") cand = cand.filter(s => statusFor(s.id).cls === "red");
+  const regions = new Set(cand.map(regionOf));
+  if (!cand.length) return toast(S.route.length ? "Every due store shown is already on the route." : "No due store with a pin in what is shown. Try another region.");
+  let how;
+  if (S.region || regions.size === 1) { cand.sort((a, b) => urgency(b.id) - urgency(a.id)); how = `most overdue in ${S.region || [...regions][0]}`; }
+  else if (S.start) {
+    const R = C.dueRadiusKm || 120;
+    cand = cand.filter(s => kmBetween(S.start, S.geo[s.id]) <= R).sort((a, b) => kmBetween(S.start, S.geo[a.id]) - kmBetween(S.start, S.geo[b.id]));
+    if (!cand.length) return toast(`No due store within ${R} km of your start. Pick a region instead.`);
+    how = `closest to your start, within ${R} km`;
+  }
+  else return toast("Pick a region first, or set your start on the Route tab, so the run stays in one area.");
+  const room = Math.max(0, size - S.route.length);
+  if (!room) return toast(`Today's route already has ${S.route.length} stores. Remove some first.`);
+  const add = cand.slice(0, room);
+  add.forEach(s => S.route.push(s.id)); routeChanged();
+  setTab("route");
+  toast(`${add.length} due store${add.length === 1 ? "" : "s"} added (${how}). Tap Optimize to order the run.`);
 }
 function statusFor(id) {
   const d = datesFor(id), t = today(), touch = maxDate([d.visit, d.order]);
@@ -1240,7 +1296,7 @@ $("#addStoreBtn").addEventListener("click", () => {
 });
 
 /* ---------- GoHighLevel settings ---------- */
-function paintApi() { $("#appVersion").textContent = "La Run version 11"; $("#crmTitle").textContent = CRM; $("#apiUrl").value = API.url(); $("#apiKey").value = API.key(); paintSync(); }
+function paintApi() { $("#appVersion").textContent = "La Run version 12"; $("#crmTitle").textContent = CRM; $("#apiUrl").value = API.url(); $("#apiKey").value = API.key(); paintSync(); }
 $("#ghlConnect").addEventListener("click", async e => {
   const url = $("#apiUrl").value.trim().replace(/\/+$/, ""), key = $("#apiKey").value.trim();
   if (!/^https:\/\//.test(url)) return toast("The service address must start with https://", true);
@@ -1268,7 +1324,7 @@ window.addEventListener("resize", () => map && map.invalidateSize());
   if (infoOk()) measureSoon();
   geocodeAll();
   paintApi(); await countPending();
-  if (connected()) { fetch(API.url() + "/health").catch(() => {}); syncSoon(); prefetchRoute(6000); }
+  if (connected()) { fetch(API.url() + "/health").catch(() => {}); syncSoon(); prefetchRoute(6000); setTimeout(() => fetchDue().catch(() => {}), 2500); }
   if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
 })();
 window.__fr = { S, solveLoop, syncAll, G };   // for support and testing

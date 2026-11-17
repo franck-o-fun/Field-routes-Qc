@@ -190,3 +190,27 @@ details.fold .in{padding:0 14px 14px;display:flex;flex-direction:column;gap:10px
 .tag.due-red{background:#f8e1de;color:var(--red)}
 .tag.due-amber{background:var(--amber-l);color:#5c3b00}
 .usual .u-l{background:none;border:0;padding:3px 2px;color:var(--mute)}
+
+/* Who's due: status colours, filter, map tools */
+.pin.st-red{background:#c8372d}
+.pin.st-amber{background:#e39a1b}
+.pin.st-new{background:#9aa39d}
+.pin.route.st-red{box-shadow:0 0 0 3px #c8372d,0 1px 4px rgba(0,0,0,.45)}
+.pin.route.st-amber{box-shadow:0 0 0 3px #e39a1b,0 1px 4px rgba(0,0,0,.45)}
+.pin.approx.st-red{border-color:#c8372d;background:#fff}
+.pin.approx.st-amber{border-color:#e39a1b;background:#fff}
+.pin.approx.st-new{border-color:#9aa39d;background:#fff}
+.seg{display:flex;background:#fff;border:1px solid var(--line);border-radius:10px;padding:3px;gap:3px}
+.seg button{flex:1;min-height:38px;border:0;border-radius:8px;background:transparent;color:var(--ink);font-weight:600;font-size:14px;white-space:nowrap;cursor:pointer}
+.seg button.on{background:var(--green);color:#fff}
+#view-map{position:relative}
+.map-tools{position:absolute;top:10px;left:54px;right:10px;z-index:600;display:flex;flex-direction:column;gap:6px;pointer-events:none}
+.map-tools>*{pointer-events:auto}
+.map-tools .seg{box-shadow:0 1px 6px rgba(0,0,0,.18)}
+.map-tools .btn{min-height:42px;box-shadow:0 1px 6px rgba(0,0,0,.18)}
+.legend{align-self:flex-start;display:flex;flex-wrap:wrap;gap:4px 10px;background:rgba(255,255,255,.92);border-radius:8px;padding:5px 9px;font-size:12px;color:var(--mute)}
+.legend span{display:inline-flex;align-items:center;gap:5px}
+.legend i{width:10px;height:10px;border-radius:50%;background:var(--green);display:inline-block}
+.legend i.st-red{background:#c8372d}.legend i.st-amber{background:#e39a1b}.legend i.st-new{background:#9aa39d}
+.pop .pst{font-weight:700}.pop .pst.red{color:#c8372d}.pop .pst.amber{color:#9a5f00}.pop .pst.ok{color:var(--green)}
+.s-name:has(.due-red),.s-name:has(.due-amber){white-space:normal}
