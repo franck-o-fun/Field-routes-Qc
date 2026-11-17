@@ -172,3 +172,21 @@ details.fold .in{padding:0 14px 14px;display:flex;flex-direction:column;gap:10px
 .big-pick{width:100%;min-height:64px;font-size:18px;margin-top:4px}
 .cat-tools{display:flex;flex-direction:column;gap:10px;position:sticky;top:-14px;z-index:5;background:var(--bg);padding:8px 0}
 #cList{display:flex;flex-direction:column;gap:10px}
+
+/* Store brief */
+.brief{gap:10px}
+.due{border-radius:10px;padding:10px 12px;font-weight:700;font-size:15px}
+.due.red{background:#f8e1de;color:var(--red)}
+.due.amber{background:var(--amber-l);color:#7a4d00}
+.due.ok{background:var(--green-l);color:var(--green)}
+.due.new{background:var(--bg);color:var(--mute);font-weight:600}
+.brief .stat b{font-size:18px}
+.co-brief{border-top:1px solid var(--line);padding-top:10px;display:flex;flex-direction:column;gap:4px}
+.co-brief .amt{font-variant-numeric:tabular-nums;font-weight:600;white-space:nowrap}
+.usual{display:flex;flex-wrap:wrap;gap:6px;margin-top:2px}
+.usual span{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:3px 8px;font-size:13.5px}
+.task{font-size:14px;padding:8px 10px;border-radius:10px;background:var(--bg)}
+.task.late{background:#f8e1de;color:var(--red)}
+.tag.due-red{background:#f8e1de;color:var(--red)}
+.tag.due-amber{background:var(--amber-l);color:#5c3b00}
+.usual .u-l{background:none;border:0;padding:3px 2px;color:var(--mute)}

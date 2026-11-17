@@ -25,6 +25,11 @@ const addDays = (s, n) => { const d = fromYmd(s); d.setUTCDate(d.getUTCDate() + 
 const weekday = s => new Intl.DateTimeFormat("en-CA", { weekday: "long", timeZone: "UTC" }).format(fromYmd(s));
 const niceDate = s => new Intl.DateTimeFormat("en-CA", { weekday: "short", month: "short", day: "numeric", year: "numeric", timeZone: "UTC" }).format(fromYmd(s));
 const mondayOf = s => addDays(s, -((fromYmd(s).getUTCDay() + 6) % 7));
+const shortDate = s => new Intl.DateTimeFormat("en-CA", { month: "short", day: "numeric", timeZone: "UTC" }).format(fromYmd(s));
+const daysBetween = (a, b) => Math.round((fromYmd(b) - fromYmd(a)) / 864e5);
+const maxDate = arr => arr.filter(Boolean).sort().pop() || "";
+const ago = s => { const n = daysBetween(s, today()); return n <= 0 ? "today" : n === 1 ? "yesterday" : `${n} days ago`; };
+const normTxt = x => String(x || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/\s+/g, " ").trim();
 
 /* ---------- IndexedDB ---------- */
 let dbp = null;
@@ -77,6 +82,7 @@ const S = {
   meta: LS.get("storeMeta", {}),
   drafts: LS.get("drafts", {}),
   done: new Set(),
+  lastLocal: {},   // storeId -> { visit, order }: latest dates saved on this phone
   line: null
 };
 if (!lists.some(l => l.id === S.listId)) S.listId = lists[0].id;
@@ -99,12 +105,13 @@ function setTab(tab) {
 }
 let sheetClose = null;
 function openSheet(title, html, foot, onClose) {
-  closeSheet(true);
+  closeSheet(true); sheetSeq++;
   $("#sheetTitle").textContent = title;
   $("#sheetContent").innerHTML = html; $("#sheetContent").scrollTop = 0;
   const f = $("#sheetFoot"); f.hidden = !foot; f.innerHTML = foot || "";
   $("#sheet").hidden = false; sheetClose = onClose || null;
 }
+let sheetSeq = 0;   // changes every time the sheet shows something new
 function closeSheet(silent) {
   if ($("#sheet").hidden) return;
   $("#sheet").hidden = true;
@@ -142,7 +149,9 @@ function renderStores() {
   renderCount();
   $("#storeList").innerHTML = shown.length ? shown.map(s => {
     const inR = S.route.includes(s.id), g = S.geo[s.id];
+    const st = S.done.has(s.id) ? null : statusFor(s.id);
     const tags = (S.done.has(s.id) ? `<span class="tag done">Done today</span>` : "") +
+      (st && st.cls === "red" ? `<span class="tag due-red">Reorder due</span>` : st && st.cls === "amber" ? `<span class="tag due-amber">Visit due</span>` : "") +
       (!s.address ? `<span class="tag nomap">No address</span>` : g && g.approx ? `<span class="tag">Approx. pin</span>` : "");
     return `<li class="${inR ? "in" : ""}">
       <button class="pick" type="button" data-id="${esc(s.id)}" aria-pressed="${inR}">
@@ -170,7 +179,7 @@ $("#addShown").addEventListener("click", () => {
 
 /* ---------- route basics ---------- */
 function routeChanged(keepInfo) {
-  LS.set("route", S.route);
+  LS.set("route", S.route); prefetchRoute();
   if (!keepInfo) { S.info = null; LS.set("routeInfo", null); setLine(null); }
   renderStores(); refreshMarkers(); if (S.tab === "route") renderRoute();
 }
@@ -587,13 +596,131 @@ const mine = rows => rows.filter(r => r.rep === S.rep);
 async function storeNotes(id) { return mine(await tx("notes", "readonly", s => s.index("storeId").getAll(id))).sort((a, b) => b.ts - a.ts); }
 async function storeOrders(id) { return mine(await tx("orders", "readonly", s => s.index("storeId").getAll(id))).sort((a, b) => b.ts - a.ts); }
 async function refreshDone() {
-  const d = today(); S.done = new Set();
-  try { for (const st of ["notes", "orders"]) for (const r of mine(await all(st))) if (r.date === d) S.done.add(r.storeId); } catch (e) { /* no storage */ }
+  const d = today(); S.done = new Set(); S.lastLocal = {};
+  try {
+    for (const st of ["notes", "orders"]) for (const r of mine(await all(st))) {
+      if (r.date === d) S.done.add(r.storeId);
+      const k = st === "notes" ? "visit" : "order", x = S.lastLocal[r.storeId] = S.lastLocal[r.storeId] || {};
+      if (!x[k] || r.date > x[k]) x[k] = r.date;
+    }
+  } catch (e) { /* no storage */ }
+}
+
+/* ---------- store brief: the store's history from the CRM, kept on the phone for no-signal stops ---------- */
+const BR = { cache: LS.get("briefs", {}), inflight: new Map() };
+function saveBriefs() {
+  const keys = Object.keys(BR.cache);
+  if (keys.length > 300) keys.sort((a, b) => BR.cache[a].at - BR.cache[b].at).slice(0, keys.length - 300).forEach(k => delete BR.cache[k]);
+  LS.set("briefs", BR.cache);
+}
+function fetchBrief(id, ms) {
+  if (!connected() || !navigator.onLine) return Promise.resolve(null);
+  if (BR.inflight.has(id)) return BR.inflight.get(id);
+  const p = (async () => {
+    const cid = await contactFor(id, false);
+    const r = await api("GET", `/api/store?storeId=${encodeURIComponent(id)}${cid ? "&contactId=" + encodeURIComponent(cid) : ""}`, null, ms || 20000);
+    if (r.found && r.contactId && r.contactId !== cid) { const m = LS.get("ghlContacts", {}); m[id] = r.contactId; LS.set("ghlContacts", m); }   // made by a teammate or a laptop
+    BR.cache[id] = Object.assign(r, { at: Date.now() }); saveBriefs();
+    return BR.cache[id];
+  })();
+  BR.inflight.set(id, p); p.then(() => BR.inflight.delete(id), () => BR.inflight.delete(id));
+  return p;
+}
+// Stores on today's route are fetched ahead, so the brief is there even where there is no signal.
+let prefT;
+function prefetchRoute(delay) {
+  clearTimeout(prefT);
+  prefT = setTimeout(async () => {
+    if (!connected() || !navigator.onLine) return;
+    let got = 0;
+    for (const id of S.route.slice()) {
+      const b = BR.cache[id]; if (b && Date.now() - b.at < 6 * 3600e3) continue;
+      try { await fetchBrief(id, 60000); got++; } catch (e) { if (e.status === 401 || e.status === 0) break; }
+      await sleep(300);
+    }
+    if (got) renderStores();
+  }, delay == null ? 4000 : delay);
+}
+const companyNamed = name => { const n = normTxt(name); return n ? COMPANIES.find(c => normTxt(c.name) === n) || null : company("reboot"); };
+// An order line read back from the CRM ("CODE name" for catalogs, "name size" for short forms) matched to a product.
+function remoteItem(co, label) {
+  if (co && co.kind === "catalog") { const sp = label.indexOf(" "); return sp > 0 ? { key: label.slice(0, sp), name: label.slice(sp + 1) } : { key: label, name: label }; }
+  const L = normTxt(label); let best = null;
+  for (const p of co ? co.products : []) { const n = normTxt(p.name); if ((L === n || L.startsWith(n + " ")) && (!best || n.length > normTxt(best.name).length)) best = p; }
+  return best ? { key: best.id, name: best.name } : { key: label, name: label };
+}
+function datesFor(id) {
+  const b = BR.cache[id], l = S.lastLocal[id] || {};
+  return {
+    visit: maxDate([l.visit, b && b.lastVisit, ...((b && b.visits) || []).map(v => v.date)]),
+    order: maxDate([l.order, b && b.lastOrder, ...((b && b.orders) || []).map(o => o.date)]),
+    reorderDays: b && b.reorderDays != null ? b.reorderDays : 35, followupDays: b && b.followupDays != null ? b.followupDays : 21
+  };
+}
+function statusFor(id) {
+  const d = datesFor(id), t = today(), touch = maxDate([d.visit, d.order]);
+  if (!touch) return { cls: "new", text: "No history yet" };
+  const so = d.order ? daysBetween(d.order, t) : null, st = daysBetween(touch, t);
+  if (so != null && d.reorderDays > 0 && so >= d.reorderDays) return { cls: "red", text: `Reorder due · ${so} days since the last order` };
+  if (d.followupDays > 0 && st >= d.followupDays) return { cls: "amber", text: `Visit due · ${st} days since the last visit` };
+  return { cls: "ok", text: "Up to date" };
+}
+// One history per store: this phone's notes and orders (even unsynced) plus the CRM's (laptop, teammates).
+function storeHistory(id, notes, localOrders) {
+  const b = BR.cache[id], seen = new Set(), orders = [];
+  for (const o of localOrders) {
+    if (o.ghlNoteId) seen.add(o.ghlNoteId);
+    const co = company(o.companyId || "reboot");
+    const ls = o.lines || Object.entries(o.qty || {}).map(([k, n]) => ({ id: k, name: (co.byId.get(k) || {}).name || k, qty: n }));
+    orders.push({ coId: co.id, coName: co.name, date: o.date, ts: o.ts || 0, total: o.total, po: o.po, rep: o.repName || o.rep, pending: o.sync === "pending",
+      items: ls.map(l => ({ key: l.id || l.code || l.name, name: l.name, qty: l.qty })) });
+  }
+  for (const o of (b && b.orders) || []) {
+    if (seen.has(o.id)) continue;
+    const co = companyNamed(o.company);
+    orders.push({ coId: co ? co.id : "", coName: co ? co.name : o.company, date: o.date, ts: o.ts || 0, total: o.total, po: o.po, rep: o.rep, remote: true, noteId: o.id,
+      items: (o.lines || []).map(l => Object.assign(remoteItem(co, l.label), { qty: l.qty })) });
+  }
+  orders.sort((a, c) => c.date.localeCompare(a.date) || c.ts - a.ts);
+  const noteIds = new Set(notes.map(n => n.ghlNoteId).filter(Boolean));
+  const visits = notes.map(n => n).concat(((b && b.visits) || []).filter(v => !noteIds.has(v.id))
+    .map(v => ({ remote: true, ghlNoteId: v.id, date: v.date, rep: v.rep, text: v.text, photos: v.photos || [], photoUrls: v.photos || [], ts: v.ts || 0 })));
+  visits.sort((a, c) => c.date.localeCompare(a.date) || (c.sync === "pending") - (a.sync === "pending") || c.ts - a.ts);
+  return { orders, visits, tasks: (b && b.tasks) || [], b };
+}
+function briefHtml(s, h, state) {
+  const d = datesFor(s.id), st = statusFor(s.id), b = h.b;
+  const groups = []; for (const o of h.orders) { let g = groups.find(x => x.name === o.coName); if (!g) groups.push(g = { name: o.coName, list: [] }); g.list.push(o); }
+  const coHtml = groups.map(g => {
+    const last = g.list[0], n90 = g.list.filter(o => daysBetween(o.date, today()) <= 90).length, avg = g.list.reduce((t, o) => t + o.total, 0) / g.list.length;
+    const freq = new Map();
+    g.list.slice(0, 3).forEach((o, i) => o.items.forEach(it => { const f = freq.get(it.key) || { name: it.name, n: 0, qty: it.qty, first: i }; f.n++; if (i < f.first) { f.first = i; f.qty = it.qty; } freq.set(it.key, f); }));
+    const usual = [...freq.values()].sort((a, c) => c.n - a.n || c.qty - a.qty).slice(0, 6);
+    return `<div class="co-brief"><div class="row between"><b>${esc(g.name)}</b><span class="amt">${money(last.total)} · ${esc(shortDate(last.date))}</span></div>
+      <div class="hint">${n90} order${n90 === 1 ? "" : "s"} in 90 days · average ${money(cents(avg))}${last.rep && last.rep !== S.rep ? ` · last by ${esc(last.rep)}` : ""}</div>
+      ${usual.length ? `<div class="usual"><span class="u-l">Usually</span>${usual.map(u => `<span>${esc(u.name)} ×${u.qty}</span>`).join("")}</div>` : ""}</div>`;
+  }).join("");
+  const tasks = h.tasks.map(t => {
+    const late = t.due && t.due < today(), title = t.title.replace(" · " + label(s), "").replace(" · " + s.name, "");
+    return `<div class="task${late ? " late" : ""}">${esc(title)}${t.due ? ` · ${late ? daysBetween(t.due, today()) + " days late" : "due " + esc(shortDate(t.due))}` : ""}</div>`;
+  }).join("");
+  const when = b && b.at ? new Intl.DateTimeFormat("en-CA", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: C.timeZone }).format(new Date(b.at)).replace(/\.$/, "") : "";
+  const foot = !connected() ? `This phone's history only. Connect ${esc(CRM)} in Reports to see orders from the team and the laptop.`
+    : state === "loading" ? (b ? `Saved copy from ${when}. Checking ${esc(CRM)}…` : `Checking ${esc(CRM)}…`)
+    : state === "failed" ? (b ? `Saved copy from ${when}. Could not reach ${esc(CRM)}.` : `Could not reach ${esc(CRM)}. Showing this phone's history.`)
+    : state === "offline" ? (b ? `Saved copy from ${when}. No signal right now.` : `No signal. Showing this phone's history.`)
+    : b ? (b.found ? `Up to date with ${esc(CRM)}.` : `Not in ${esc(CRM)} yet. It is added with the first note or order.`) : "";
+  return `<div class="card brief"><h2>Before you go in</h2>
+    <div class="due ${st.cls}">${esc(st.text)}</div>
+    <div class="stats"><div class="stat"><b>${d.visit ? esc(ago(d.visit)) : "Never"}</b><span>last visit${d.visit ? " · " + esc(shortDate(d.visit)) : ""}</span></div>
+      <div class="stat"><b>${d.order ? esc(ago(d.order)) : "Never"}</b><span>last order${d.order ? " · " + esc(shortDate(d.order)) : ""}</span></div></div>
+    ${coHtml}${tasks ? `<div class="label">Open follow-ups</div>${tasks}` : ""}
+    ${foot ? `<p class="hint">${foot}</p>` : ""}</div>`;
 }
 const mapsHref = s => "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent([s.name, s.address, s.city, s.postal].filter(Boolean).join(", "));
 async function openStore(id) {
   const s = byId.get(id), m = S.meta[id] || {}, g = S.geo[id];
-  const [notes, orders, lastN] = await Promise.all([storeNotes(id).catch(() => []), storeOrders(id).catch(() => []), lastNoteFor(id).catch(() => null)]);
+  const [notes, orders] = await Promise.all([storeNotes(id).catch(() => []), storeOrders(id).catch(() => [])]);
   const inR = S.route.includes(id);
   openSheet(s.name, `
     <div class="card"><div class="addr">${esc(s.address || "No street address")}<br>${esc([s.city, s.postal].filter(Boolean).join(" "))}
@@ -603,15 +730,30 @@ async function openStore(id) {
       ${s.phone ? `<a class="btn" href="tel:${esc(s.phone.replace(/[^\d+]/g, ""))}">Call ${esc(s.phone)}</a>` : ""}
       ${s.email ? `<div class="hint">${esc(s.email)}</div>` : ""}</div>
     <div class="grid2"><button class="btn primary" data-go="order">Order</button><button class="btn primary" data-go="note">Note</button></div>
+    <div id="sbBrief"></div>
     <button class="btn" data-go="route">${inR ? "Remove from route" : "Add to route"}</button>
-    <div class="card"><h2>Last visit</h2>${lastN ? `<div class="hint">${niceDate(lastN.date)}${lastN.remote ? " · from " + CRM + (lastN.rep ? ", " + esc(lastN.rep) : "") : ""}</div><div class="note-last">${esc(lastN.text)}</div>${photosHtml(lastN.photos)}` : `<p class="hint">No earlier note.</p>`}</div>
-    <div class="card"><h2>Orders</h2>${orders.length ? `<div class="hist">${orders.slice(0, 8).map(o => { const co = company(o.companyId || "reboot"); return `<div class="h"><b>${esc(co.name)} · ${money(o.total)}</b>${co.minimum && o.total < co.minimum ? " · under minimum" : ""}<small>${niceDate(o.date)}${o.po ? " · PO " + esc(o.po) : ""}</small></div>`; }).join("")}</div>` : `<p class="hint">No order saved for this store yet.</p>`}</div>
-    ${notes.filter(n => n !== lastN).length ? `<div class="card"><h2>Earlier notes</h2><div class="hist">${notes.filter(n => n !== lastN).slice(0, 7).map(n => `<div class="h"><small>${niceDate(n.date)}</small><div class="note-last">${esc(n.text)}</div></div>`).join("")}</div></div>` : ""}`);
+    <div id="sbHist"></div>`);
+  const seq = sheetSeq;
+  const paint = state => {
+    if (seq !== sheetSeq || $("#sheet").hidden) return;              // the rep moved on
+    const h = storeHistory(id, notes, orders), lastN = h.visits[0] || null, earlier = h.visits.slice(1, 8);
+    const by = x => x.rep && x.rep !== S.rep ? ", " + esc(x.rep) : "";
+    $("#sbBrief").innerHTML = briefHtml(s, h, state);
+    $("#sbHist").innerHTML = `
+      <div class="card"><h2>Last visit</h2>${lastN ? `<div class="hint">${niceDate(lastN.date)}${lastN.remote ? " · from " + esc(CRM) : ""}${by(lastN)}</div><div class="note-last">${esc(lastN.text)}</div>${photosHtml(lastN.photos)}` : `<p class="hint">No earlier note.</p>`}</div>
+      <div class="card"><h2>Orders</h2>${h.orders.length ? `<div class="hist">${h.orders.slice(0, 8).map(o => { const co = o.coId ? company(o.coId) : null; return `<div class="h"><b>${esc(o.coName)} · ${money(o.total)}</b>${co && co.minimum && o.total < co.minimum ? " · under minimum" : ""}<small>${niceDate(o.date)}${o.po ? " · PO " + esc(o.po) : ""}${o.remote ? " · from " + esc(CRM) : ""}${by(o)}${o.pending ? " · waiting to sync" : ""}</small></div>`; }).join("")}</div>` : `<p class="hint">No order for this store yet.</p>`}</div>
+      ${earlier.length ? `<div class="card"><h2>Earlier notes</h2><div class="hist">${earlier.map(n => `<div class="h"><small>${niceDate(n.date)}${by(n)}</small><div class="note-last">${esc(n.text)}</div></div>`).join("")}</div></div>` : ""}`;
+  };
+  paint(!connected() ? "" : navigator.onLine ? "loading" : "offline");
   $("#sheetContent").onclick = e => {
     const b = e.target.closest("[data-go]"); if (!b) return;
     if (b.dataset.go === "order") openOrder(id); else if (b.dataset.go === "note") openNote(id);
     else { toggleRoute(id); openStore(id); }
   };
+  if (connected() && navigator.onLine) {
+    try { await fetchBrief(id); paint(""); renderStores(); }
+    catch (e) { paint("failed"); }
+  }
 }
 const photosHtml = (ph, rm) => ph && ph.length ? `<div class="photos">${ph.map((p, i) => `<div class="ph"><img src="${p}" alt="Visit photo ${i + 1}">${rm ? `<button class="rm" type="button" data-rmph="${i}" aria-label="Remove photo">✕</button>` : ""}</div>`).join("")}</div>` : "";
 
@@ -853,6 +995,7 @@ async function openOrder(id, coId) {
     try { await loadCatalog(co); } catch (e) { return toast(`The ${co.name} catalog could not load. Check your signal and try again.`, true); }
   }
   const lc = LS.get("lastCompany", {}); lc[id] = co.id; LS.set("lastCompany", lc);
+  if (!BR.cache[id] || Date.now() - BR.cache[id].at > 15 * 60e3) fetchBrief(id).catch(() => {});   // fresh history for "Last order"
   const dkey = co.id + "|" + id, catalog = co.kind === "catalog", f = co.orderForm;
   const qty = Object.assign({}, S.drafts[dkey] || (co.id === "reboot" ? S.drafts[id] : null) || {});
   for (const k of Object.keys(qty)) if (!co.byId.has(k)) delete qty[k];
@@ -883,7 +1026,7 @@ async function openOrder(id, coId) {
       <input id="cSearch" type="search" placeholder="Product, code, brand or barcode" autocomplete="off" aria-label="Search the catalog">
       <select id="cBrand" aria-label="Brand"><option value="">All brands</option>${brands.map(b => `<option value="${esc(b)}">${esc(b)}</option>`).join("")}</select>
       <div class="row gap"><button class="btn small" id="cMine" type="button"></button><button class="btn small" id="cLast" type="button">Last order</button></div></div>
-      <div id="cList"></div>` : fixedList()}`,
+      <div id="cList"></div>` : `<button class="btn small" id="cLast" type="button">Last order</button>` + fixedList()}`,
     `<div class="total-row"><div><div class="label">Total</div><div class="min-msg" id="oMin"></div></div><div class="big" id="oTotal"></div></div>
      <div class="row gap"><button class="btn" id="oXlsx" type="button">Preview</button><button class="btn primary" id="oSend" type="button" style="flex:2">Send order</button></div>
      <div class="hint">Send to ${esc(co.orderEmail)}</div>`,
@@ -930,11 +1073,15 @@ async function openOrder(id, coId) {
     if (b) { const pid = b.closest(".prod").dataset.p; return setQty(pid, (qty[pid] || 0) + +b.dataset.d); }
     if (e.target.id === "cMine") { view = view === "order" ? "browse" : "order"; return renderCat(); }
     if (e.target.id === "cLast") {
-      const prev = (await storeOrders(id).catch(() => [])).find(o => (o.companyId || "reboot") === co.id);
+      // Newest order for this company, from this phone or from the CRM (laptop, teammates).
+      const local = await storeOrders(id).catch(() => []);
+      const prev = storeHistory(id, [], local).orders.find(o => o.coId === co.id);
       if (!prev) return toast(`No earlier ${co.name} order for this store.`);
-      let added = 0; for (const [k, n] of Object.entries(prev.qty)) if (co.byId.has(k)) { qty[k] = n; added++; }
+      let added = 0, missing = 0;
+      for (const it of prev.items) { if (co.byId.has(it.key) && it.qty > 0) { qty[it.key] = it.qty; added++; } else missing++; }
       S.drafts[dkey] = qty; LS.set("drafts", S.drafts); view = "order"; renderCat(); paint(); prebuild();
-      toast(`${added} product${added === 1 ? "" : "s"} from the ${niceDate(prev.date)} order. Adjust the quantities.`);
+      toast(`${added} product${added === 1 ? "" : "s"} from the ${niceDate(prev.date)} order${prev.rep && prev.rep !== S.rep ? " by " + prev.rep : ""}.` +
+        (missing ? ` ${missing} no longer in the catalog.` : "") + " Adjust the quantities.");
     }
   };
   $("#sheetContent").oninput = e => {
@@ -1093,7 +1240,7 @@ $("#addStoreBtn").addEventListener("click", () => {
 });
 
 /* ---------- GoHighLevel settings ---------- */
-function paintApi() { $("#appVersion").textContent = "La Run version 10"; $("#crmTitle").textContent = CRM; $("#apiUrl").value = API.url(); $("#apiKey").value = API.key(); paintSync(); }
+function paintApi() { $("#appVersion").textContent = "La Run version 11"; $("#crmTitle").textContent = CRM; $("#apiUrl").value = API.url(); $("#apiKey").value = API.key(); paintSync(); }
 $("#ghlConnect").addEventListener("click", async e => {
   const url = $("#apiUrl").value.trim().replace(/\/+$/, ""), key = $("#apiKey").value.trim();
   if (!/^https:\/\//.test(url)) return toast("The service address must start with https://", true);
@@ -1121,7 +1268,7 @@ window.addEventListener("resize", () => map && map.invalidateSize());
   if (infoOk()) measureSoon();
   geocodeAll();
   paintApi(); await countPending();
-  if (connected()) { fetch(API.url() + "/health").catch(() => {}); syncSoon(); }
+  if (connected()) { fetch(API.url() + "/health").catch(() => {}); syncSoon(); prefetchRoute(6000); }
   if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
 })();
 window.__fr = { S, solveLoop, syncAll, G };   // for support and testing
