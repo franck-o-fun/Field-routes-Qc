@@ -314,5 +314,14 @@ window.LA_RUN_FR = {
   "{0}, by the case": "{0}, à la caisse",
   "{0}, by the unit": "{0}, à l'unité",
   "{0}: {1} order{2}, {3}": "{0} : {1} commande{2}, {3}",
-  " ({0} in order)": " ({0} dans la commande)"
+  " ({0} in order)": " ({0} dans la commande)",
+  "Nothing is saved or sent.": "Rien n'est enregistré ni envoyé.",
+  "Email": "Courriel",
+  "Address": "Adresse",
+  "Units": "Unités",
+  "Subtotal": "Sous-total",
+  "Before taxes": "Avant taxes",
+  "When you tap Send order, this goes to {0} as {1}.": "Quand vous touchez Envoyer la commande, ceci part à {0} sous le nom {1}.",
+  "Excel file": "Fichier Excel",
+  "Back to the order": "Retour à la commande"
 };

@@ -236,3 +236,24 @@ body.scanning{overflow:hidden}
 .scan-prod .step .sq{min-width:38px;text-align:center;font-weight:700;font-size:18px;font-variant-numeric:tabular-nums}
 .scan-note{font-size:13.5px;color:#7a4d00;background:var(--amber-l);border-radius:8px;padding:5px 9px}
 .pick-p{justify-content:flex-start;text-align:left}
+
+/* Order preview (read only) */
+.pv{position:fixed;inset:0;z-index:2500;background:rgba(23,38,30,.55);display:flex;align-items:flex-end;justify-content:center}
+.pv-body{background:var(--bg);width:100%;max-width:640px;height:100%;display:flex;flex-direction:column}
+.pv-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:calc(env(safe-area-inset-top) + 10px) 10px 10px 16px;background:var(--green);color:#fff}
+.pv-head b{display:block;font-size:17px}.pv-head small{opacity:.85;font-size:13px}
+.pv-x{background:none;border:0;color:#fff;font-size:22px;min-width:44px;min-height:44px;cursor:pointer}
+.pv-scroll{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:14px;display:flex;flex-direction:column;gap:14px}
+.pv-info{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:0;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px;font-size:14px}
+.pv-info dt{color:var(--mute)}.pv-info dd{margin:0;word-break:break-word}
+.pv-tab{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden;font-size:14px}
+.pv-tab th{background:var(--green);color:#fff;font-size:12px;text-align:left;padding:8px}
+.pv-tab td{padding:9px 8px;border-top:1px solid var(--line);vertical-align:top}
+.pv-tab td small{display:block;color:var(--mute);font-size:12px}
+.pv-tab .n{text-align:right;white-space:nowrap}.pv-tab th:not(:first-child){text-align:right}
+.pv-tot{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 14px;display:flex;flex-direction:column;gap:6px;font-size:15px}
+.pv-tot>div{display:flex;justify-content:space-between;gap:10px}.pv-tot span{color:var(--mute)}
+.pv-tot .grand{border-top:1px solid var(--line);padding-top:8px;font-size:19px}.pv-tot .grand span{color:var(--ink);font-weight:700}
+.pv-warn{color:var(--amber);font-weight:600;font-size:14px}
+.pv-foot{display:flex;gap:8px;background:var(--card);border-top:1px solid var(--line);padding:10px 14px calc(env(safe-area-inset-bottom) + 10px)}
+@media (min-width:700px){.pv{align-items:center}.pv-body{height:min(92vh,900px);border-radius:16px;overflow:hidden}}

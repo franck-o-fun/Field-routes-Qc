@@ -1306,10 +1306,51 @@ async function openOrder(id, coId) {
   $("#sheetContent").onchange = e => { if (e.target.id === "cBrand") { brand = e.target.value; q = ""; $("#cSearch").value = ""; view = "browse"; renderCat(); } };
   $("#sheetContent").addEventListener("focusout", e => { if (e.target.closest(".prod")) paint(); });
   $("#sheetContent").addEventListener("focusin", e => { if (e.target.matches(".prod input")) setTimeout(() => { try { e.target.select(); } catch (x) {} }, 0); });
+  // Preview: the order on screen, read only. Nothing is built, saved or sent. The Excel stays one tap away.
+  const showPreview = o => {
+    const rows = co.products.filter(p => o.qty[p.id] > 0), f2 = co.orderForm, tx = f2.totals;
+    const units = rows.reduce((a, p) => a + o.qty[p.id], 0), sub = cents(rows.reduce((a, p) => a + o.qty[p.id] * p.price, 0));
+    const gst = tx ? cents(sub * (tx.gstRate || 0)) : 0, qst = tx ? cents(sub * (tx.qstRate || 0)) : 0, min = co.minimum || 0;
+    const info = [[tt("Store"), s.name], [tt("Date"), niceDate(o.date)], ["PO", f2.po && o.po], [tt("Store number"), f2.storeNumber && o.storeNo], [tt("Contact"), f2.contact && o.contact],
+      [tt("Phone"), f2.phone && o.phone], [tt("Email"), f2.email && o.email], [tt("Address"), f2.address && o.address], [tt("Rep"), f2.rep && o.rep]].filter(x => x[1]);
+    const pv = document.createElement("div"); pv.className = "pv";
+    pv.innerHTML = `<div class="pv-body" role="dialog" aria-modal="true" aria-label="${tt("Preview")}">
+      <div class="pv-head"><div><b>${tt("Preview")} · ${esc(co.name)}</b><small>${tt("Nothing is saved or sent.")}</small></div><button class="pv-x" type="button" data-pv="close" aria-label="${tt("Close")}">✕</button></div>
+      <div class="pv-scroll">
+        <dl class="pv-info">${info.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl>
+        <table class="pv-tab"><thead><tr><th>${tt("Product")}</th><th>${tt("Qty")}</th><th>${tt("Price")}</th><th>${tt("Total")}</th></tr></thead><tbody>
+        ${rows.map(p => `<tr><td><b>${esc(p.name)}</b><small>${esc([p.code, p.size, p.by === "case" ? tt("a case") : ""].filter(Boolean).join(" · "))}</small></td>
+          <td class="n">${o.qty[p.id]}</td><td class="n">${money(p.price)}</td><td class="n">${money(cents(o.qty[p.id] * p.price))}</td></tr>`).join("")}
+        </tbody></table>
+        <div class="pv-tot">
+          <div><span>${tt("Units")}</span><b>${units}</b></div>
+          ${tx ? `<div><span>${tt("Subtotal")}</span><b>${money(sub)}</b></div><div><span>TPS (5 %)</span><b>${money(gst)}</b></div><div><span>TVQ (9,975 %)</span><b>${money(qst)}</b></div>
+            <div class="grand"><span>${tt("Total")}</span><b>${money(cents(sub + gst + qst))}</b></div>`
+            : `<div class="grand"><span>${tt("Total")}</span><b>${money(sub)}</b></div><div><span></span><small>${tt("Before taxes")}</small></div>`}
+          ${min > 0 && sub < min ? `<div class="pv-warn">${T`${money(cents(min - sub))} missing to reach ${money(min)}`}</div>` : ""}
+        </div>
+        <p class="hint">${T`When you tap Send order, this goes to ${esc(co.orderEmail)} as ${esc(o.fileName)}.`}</p>
+      </div>
+      <div class="pv-foot"><button class="btn" type="button" data-pv="file">${tt("Excel file")}</button><button class="btn primary" type="button" data-pv="close" style="flex:2">${tt("Back to the order")}</button></div></div>`;
+    document.body.appendChild(pv);
+    pv.onclick = async ev => {
+      const b = ev.target.closest("[data-pv]"); if (!b && ev.target !== pv) return;
+      if (!b || b.dataset.pv === "close") return pv.remove();
+      b.disabled = true;
+      try {
+        const blob = ready && ready.sig === sig(o) ? ready.blob : await buildOrderXlsx(o, co); ready = { sig: sig(o), blob };
+        const how = await deliver(blob, o.fileName);
+        if (how === "again") toast(tt("The file is ready. Tap the button once more."));
+        else if (how === "shared" || how === "downloaded") toast(T`Preview only. Nothing was saved or sent to ${CRM}. Tap Send order when it is right.`);
+      } catch (x) { toast(tt("The Excel order could not be created. Close the order, reopen it and try again."), true); }
+      finally { b.disabled = false; }
+    };
+  };
   $("#sheetFoot").onclick = async e => {
     if (e.target.id !== "oSend" && e.target.id !== "oXlsx") return;
     const o = snapshot();
     if (o.total <= 0) return toast(tt("An empty order cannot be sent. Add at least one product."), true);
+    if (e.target.id === "oXlsx") return showPreview(o);
     const btn = e.target; btn.disabled = true;
     try {
       // The file is normally ready before the tap, so the share sheet opens inside the tap itself (Safari requires that).
@@ -1476,7 +1517,7 @@ $("#addStoreBtn").addEventListener("click", () => {
 });
 
 /* ---------- GoHighLevel settings ---------- */
-function paintApi() { $("#appVersion").textContent = "La Run version 17"; $("#crmTitle").textContent = CRM; $("#apiUrl").value = API.url(); $("#apiKey").value = API.key(); paintSync(); }
+function paintApi() { $("#appVersion").textContent = "La Run version 18"; $("#crmTitle").textContent = CRM; $("#apiUrl").value = API.url(); $("#apiKey").value = API.key(); paintSync(); }
 $("#ghlConnect").addEventListener("click", async e => {
   const url = $("#apiUrl").value.trim().replace(/\/+$/, ""), key = $("#apiKey").value.trim();
   if (!/^https:\/\//.test(url)) return toast(tt("The service address must start with https://"), true);

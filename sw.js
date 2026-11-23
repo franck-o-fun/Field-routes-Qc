@@ -1,5 +1,5 @@
 // Keeps the app shell available with a weak signal. Bump VERSION after each upload.
-const VERSION = "field-routes-17";
+const VERSION = "field-routes-18";
 const SHELL = [
   "./", "index.html", "styles.css", "app.js", "config.js",
   "stores.js", "template.js",
