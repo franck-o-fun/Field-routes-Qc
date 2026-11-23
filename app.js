@@ -566,7 +566,7 @@ async function syncOrder(r) {
   const contactId = await contactFor(r.storeId, true);
   const s = byId.get(r.storeId);
   const co = company(r.companyId || "reboot"); await loadCatalog(co);
-  const o = { companyId: co.id, storeName: r.storeName, storeNo: r.storeNo, po: r.po, address: r.address, rep: r.repName || r.rep, contact: r.contact, phone: r.phone, email: r.email, qty: r.qty };
+  const o = { companyId: co.id, storeName: r.storeName, storeNo: r.storeNo, po: r.po, address: r.address, rep: r.repName || r.rep, contact: r.contact, phone: r.phone, email: r.email, date: r.date, qty: r.qty };
   const fileName = r.fileName || (s ? orderFileName(co, s, r.date) : `Bon de commande ${r.date}.xlsx`);
   const xlsx = r.fileUrl ? null : await blobToDataUrl(await buildOrderXlsx(o, co));
   const lines = r.lines || Object.entries(r.qty).map(([k, n]) => { const p = co.byId.get(k); return p ? { code: p.code || "", name: p.name, size: p.size || "", qty: n, price: p.price } : null; }).filter(Boolean);
@@ -899,7 +899,7 @@ const company = id => COMPANIES.find(c => c.id === id) || COMPANIES[0];
 const catalogs = {};
 // A catalog company's products are read from its own Excel order form: one row per product.
 function loadCatalog(co) {
-  if (co.kind !== "catalog") return Promise.resolve(co);
+  if (co.kind !== "catalog") return co.formFile ? loadFormFile(co) : Promise.resolve(co);
   if (catalogs[co.id]) return catalogs[co.id];
   catalogs[co.id] = (async () => {
     const r = await fetch(co.formFile); if (!r.ok) throw new Error("form " + r.status);
@@ -925,6 +925,14 @@ function loadCatalog(co) {
     co.products = products; co.byId = new Map(products.map(p => [p.id, p])); co.formBuf = buf;
     return co;
   })().catch(e => { delete catalogs[co.id]; throw e; });
+  return catalogs[co.id];
+}
+// A short fixed form (products listed in config.js) kept as its own Excel file next to the app, e.g. mooz-form.xlsx.
+function loadFormFile(co) {
+  if (co.formBuf) return Promise.resolve(co);
+  if (catalogs[co.id]) return catalogs[co.id];
+  catalogs[co.id] = fetch(co.formFile).then(r => { if (!r.ok) throw new Error("form " + r.status); return r.arrayBuffer(); })
+    .then(buf => { co.formBuf = buf; return co; }).catch(e => { delete catalogs[co.id]; throw e; });
   return catalogs[co.id];
 }
 const orderTotal = (q, co) => cents(Object.entries(q).reduce((t, [id, n]) => { const p = co.byId.get(id); return t + (p ? n * p.price : 0); }, 0));
@@ -1011,12 +1019,13 @@ async function compactSheet(doc, zip, co, o) {
 }
 async function buildOrderXlsx(o, co) {
   co = co || company(o.companyId);
-  const zip = await JSZip.loadAsync(co.kind === "catalog" ? co.formBuf : b64buf(window[co.template])), path = "xl/worksheets/sheet1.xml";
+  if (co.formFile && !co.formBuf) await loadCatalog(co);
+  const zip = await JSZip.loadAsync(co.formBuf || b64buf(window[co.template])), path = "xl/worksheets/sheet1.xml";
   const doc = new DOMParser().parseFromString(await zip.file(path).async("string"), "application/xml");
   if (doc.getElementsByTagName("parsererror").length) throw new Error("template");
   const ed = sheetEditor(doc), f = co.orderForm, put1 = (ref, v) => { if (ref && v !== "" && v != null) ed.set(ref, v); };
   put1(f.storeName, o.storeName); put1(f.storeNumber, /^\d{1,9}$/.test(o.storeNo || "") ? Number(o.storeNo) : o.storeNo);
-  put1(f.po, o.po); put1(f.address, o.address); put1(f.rep, o.rep); put1(f.contact, o.contact); put1(f.phone, o.phone); put1(f.email, o.email);
+  put1(f.po, o.po); put1(f.address, o.address); put1(f.rep, o.rep); put1(f.contact, o.contact); put1(f.phone, o.phone); put1(f.email, o.email); put1(f.date, o.date);
   let extra = f.extraRow;
   for (const [pid, q] of Object.entries(o.qty)) {
     const p = co.byId.get(pid); if (!p || !(q > 0)) continue;   // zero stays blank
@@ -1029,6 +1038,13 @@ async function buildOrderXlsx(o, co) {
     ed.set("F" + r, fv && fv.textContent ? Number(fv.textContent) : "", st("F"));
     ed.set("G" + r, p.formLine.description, st("G")); ed.set("H" + r, p.formLine.caseQty, st("H")); ed.set("I" + r, p.formLine.format, st("I"));
     ed.set("J" + r, p.price, st("J")); ed.set("K" + r, q, st("K"));
+  }
+  if (f.totals) {   // forms with their own totals (MOOZ): store the results next to the formulas so Mail and phone previews show them too
+    const cache = (ref, v) => { const c = ed.cellOf(ref); [...c.getElementsByTagNameNS(NS, "v")].forEach(x => c.removeChild(x)); c.removeAttribute("t"); const e = doc.createElementNS(NS, "v"); e.textContent = String(v); c.appendChild(e); };
+    let units = 0, sub = 0;
+    for (const p of co.products) { const q = o.qty[p.id] > 0 ? o.qty[p.id] : 0; units += q; sub = cents(sub + q * p.price); if (p.row && f.lineTotal) cache(f.lineTotal + p.row, cents(q * p.price)); }
+    const t = f.totals, gst = cents(sub * (t.gstRate || 0)), qst = cents(sub * (t.qstRate || 0));
+    if (t.units) cache(t.units, units); if (t.subtotal) cache(t.subtotal, sub); if (t.gst) cache(t.gst, gst); if (t.qst) cache(t.qst, qst); if (t.total) cache(t.total, cents(sub + gst + qst));
   }
   if (co.compact) await compactSheet(doc, zip, co, o);
   let xml = new XMLSerializer().serializeToString(doc);
@@ -1460,7 +1476,7 @@ $("#addStoreBtn").addEventListener("click", () => {
 });
 
 /* ---------- GoHighLevel settings ---------- */
-function paintApi() { $("#appVersion").textContent = "La Run version 16"; $("#crmTitle").textContent = CRM; $("#apiUrl").value = API.url(); $("#apiKey").value = API.key(); paintSync(); }
+function paintApi() { $("#appVersion").textContent = "La Run version 17"; $("#crmTitle").textContent = CRM; $("#apiUrl").value = API.url(); $("#apiKey").value = API.key(); paintSync(); }
 $("#ghlConnect").addEventListener("click", async e => {
   const url = $("#apiUrl").value.trim().replace(/\/+$/, ""), key = $("#apiKey").value.trim();
   if (!/^https:\/\//.test(url)) return toast(tt("The service address must start with https://"), true);
